@@ -1,0 +1,25 @@
+# Defaults for sip-fsms-receive initscript
+# sourced by /etc/init.d/sip-fsms-receive
+# installed at /etc/default/sip-fsms-receive by the maintainer scripts
+
+#
+# This is a POSIX shell fragment
+#
+
+# Custom listen address or port range
+#DAEMON_ARGS="$DAEMON_ARGS --sip-listen=127.0.0.1:5063 --rtp-listen=1.2.3.4:35000-35100"
+
+# Persistent cache for parts of fragmented SMS
+#DAEMON_ARGS="$DAEMON_ARGS --frag-cache=/var/cache/fsms_frag_cache"
+
+# Country code for national telephone numbers
+#DAEMON_ARGS="$DAEMON_ARGS --country=CZ"
+
+# Overwrite telephone number of receiver
+#DAEMON_ARGS="$DAEMON_ARGS --sip-number=123456789"
+
+# Store received SMS to disk directory
+#DAEMON_ARGS="$DAEMON_ARGS --store-to-dir=/var/sms/"
+
+# Send received SMS via email
+#DAEMON_ARGS="$DAEMON_ARGS --send-email=recipient@example.com,double-bounce"
