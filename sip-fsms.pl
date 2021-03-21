@@ -1716,8 +1716,17 @@ sub number_for_rpdu {
 	return undef unless defined $number;
 	if (ref $number) {
 		return $number if (not defined $number->[1] or $number->[1] != 0b101) and length $number->[0] <= 20 and $number->[0] =~ /^[0-9*#a-cA-C]*$/;
-	} elsif ($number =~ /^(?:sips?:|tel:)?((?:\+|00)?[0-9]{1,20})(?:@.*)?$/) {
-		return [$1];
+	} elsif ($number =~ /^(?:sips?:|tel:)?(\+|00(?=[1-9][0-9]))?([-.()0-9*#a-cA-C]+)(?:\@[^;]*)?((?:;[^=]+=[^;]+)+)?$/) {
+		my $prefix = $1;
+		my $suffix = $3;
+		$number = $2;
+		if (not defined $prefix and defined $suffix and $suffix =~ /;phone-context=(\+|00(?=[1-9][0-9]))?([-.()0-9*#a-cA-C]+)(?:;|$)/) {
+			$prefix = $1;
+			$number = $2 . $number;
+		}
+		$number =~ s/[-.()]//g;
+		$prefix = '' unless defined $prefix;
+		return [ $prefix . $number ] if length $number > 0 and length $number <= 20;
 	}
 	return undef;
 }
