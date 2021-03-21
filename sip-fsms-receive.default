@@ -6,6 +6,9 @@
 # This is a POSIX shell fragment
 #
 
+# User under which is daemon running
+#USER="nobody"
+
 # Custom listen address or port range
 #DAEMON_ARGS="$DAEMON_ARGS --sip-listen=127.0.0.1:5063 --rtp-listen=1.2.3.4:35000-35100"
 
