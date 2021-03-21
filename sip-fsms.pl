@@ -10,7 +10,7 @@ use MIME::Base64 qw(encode_base64);
 use Storable qw(retrieve store);
 use Time::Local qw(timegm timelocal);
 
-use Net::SIP 0.816 qw(create_rtp_sockets invoke_callback ip_canonical laddr4dst sip_hdrval2parts sip_uri2parts);
+use Net::SIP 0.816 qw(create_rtp_sockets invoke_callback ip_canonical ip_parts2sockaddr ip_sockaddr2parts laddr4dst sip_hdrval2parts sip_uri2parts);
 use Number::Phone::Country 'noexport';
 use Number::Phone::Lib;
 
@@ -1877,6 +1877,19 @@ sub sip_split_name_addr {
 	return ($name_addr, undef);
 }
 
+sub ip_addr_is_reserved {
+	my ($addr) = @_;
+	return (ip_canonical($addr) =~ /^(?:0|10|100\.(?:6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])|127|169\.254|172\.(?:1[6-9]|2[0-9]|3[0-1])|192\.0\.0|192\.0\.2|192\.31\.196|192\.52\.193|192\.88\.99|192\.168|192\.175\.48|198\.1[8-9]|198\.51\.100|203\.0\.113|22[4-9]|2[3-5][0-9])\./) ? 1 : 0;
+}
+
+sub ip_addr_is_invalid {
+	my ($addr) = @_;
+	return 1 unless defined $addr;
+	return 1 unless length $addr;
+	return 1 unless eval { $addr = ip_canonical($addr) };
+	return ($addr =~ /^(?:0|22[4-9]|2[3-5][0-9])\./) ? 1 : 0;
+}
+
 sub protocol_sip_loop {
 	my (%options) = @_;
 	my $role = $options{role};
@@ -1972,6 +1985,27 @@ sub protocol_sip_loop {
 				warn localtime . " - No supported codec\n";
 				$call->cleanup();
 				return $request->create_response('488', 'Not Acceptable Here');
+			}
+
+			if (ip_addr_is_invalid($sdp_addr_peer) or (not ip_addr_is_reserved($param->{fsms_peer_addr}) and ip_addr_is_reserved($sdp_addr_peer) and ip_canonical($param->{fsms_peer_addr}) ne ip_canonical($sdp_addr_peer))) {
+				warn localtime . " - Peer is behind NAT and has not announced public address in SDP, ignoring private address from SDP\n";
+				my @media_peer = $sdp_peer->get_media();
+				my $raddr = $param->{media_raddr};
+				foreach my $i (0..$#$raddr) {
+					if (not defined $raddr->[$i]) {
+						if ($media_peer[$i]->{addr} eq $sdp_addr_peer) {
+							my $range = $media_peer[$i]->{range} || 1;
+							my @socks = map { ip_parts2sockaddr($param->{fsms_peer_addr}, $media_peer[$i]->{port} + $_) } (0..$range-1);
+							$raddr->[$i] = @socks == 1 ? $socks[0] : \@socks;
+						}
+					} else {
+						foreach (ref $raddr->[$i] ? @{$raddr->[$i]} : $raddr->[$i]) {
+							my ($addr, $port, $fam) = ip_sockaddr2parts($_);
+							$_ = ip_parts2sockaddr($param->{fsms_peer_addr}, $port, $fam) if $addr eq ip_canonical($sdp_addr_peer);
+						}
+					}
+				}
+				$sdp_addr_peer = $param->{fsms_peer_addr};
 			}
 
 			my $codec_name = ($codec eq 'alaw') ? 'PCMA/8000' : 'PCMU/8000';
