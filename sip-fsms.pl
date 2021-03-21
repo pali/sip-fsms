@@ -7,6 +7,7 @@ use warnings;
 use Encode qw(decode encode);
 use Digest::MD5 qw(md5_hex);
 use MIME::Base64 qw(encode_base64);
+use Scalar::Util qw(refaddr weaken);
 use Storable qw(retrieve store);
 use Time::Local qw(timegm timelocal);
 
@@ -1968,9 +1969,14 @@ sub protocol_sip_loop {
 
 	$ua->add_timer(30*60, sub { process_frag_cache($frag_cache_expire, $country) }, 30*60, 'process_frag_cache') if $frag_cache_expire;
 
+	my $stop;
+	my $stopping;
+	my %calls;
+
 	$ua->listen(
 		filter => sub {
 			my ($from, $request) = @_;
+			return 0 if $stopping;
 			($from) = sip_hdrval2parts(from => $from);
 			my ($from_addr) = sip_split_name_addr($from);
 			my ($from_domain, $from_user) = sip_uri2parts($from_addr);
@@ -1983,14 +1989,23 @@ sub protocol_sip_loop {
 		},
 		cb_create => sub {
 			my ($call, $request, $leg, $from) = @_;
+			return 0 if $stopping;
 			my $param = $call->{param};
 			# This is the only callback which provides peer socket address
 			$param->{fsms_peer_addr} = $from->{addr};
+			my $refaddr = refaddr($call);
+			$calls{$refaddr} = $call;
+			weaken($calls{$refaddr});
 			return 1;
 		},
 		cb_invite => sub {
 			my ($call, $request) = @_;
 			my $param = $call->{param};
+
+			if ($stopping) {
+				$call->cleanup();
+				return;
+			}
 
 			my ($rtp_port, $rtp_sock, $rtcp_sock) = create_rtp_sockets($rtp_listen_addr, 2, $rtp_listen_min_port, $rtp_listen_max_port);
 			$rtp_sock or do { warn localtime . " - Error: Cannot create rtp socket at $rtp_listen_addr: $!\n"; $call->cleanup(); return $request->create_response('503', 'Service Unavailable'); };
@@ -2188,12 +2203,36 @@ sub protocol_sip_loop {
 			my $param = $call->{param};
 			my $cleanup = delete $param->{fsms_cleanup};
 			$cleanup->() if defined $cleanup;
+			my $refaddr = refaddr($call);
+			delete $calls{$refaddr};
+			if ($stopping and not grep { defined $_ } values %calls) {
+				warn localtime . " - All calls ended\n";
+				warn localtime . " - Stopping main loop...\n";
+				$stop = 1;
+			}
 		},
 	);
 
-	my $stop;
-	local ($SIG{INT}, $SIG{QUIT}, $SIG{TERM});
-	$SIG{INT} = $SIG{QUIT} = $SIG{TERM} = sub { $SIG{INT} = $SIG{QUIT} = $SIG{TERM} = 'DEFAULT'; warn localtime . " - Stopping main loop...\n"; $stop = 1; };
+	my %defaultsig = ( INT => $SIG{INT}, QUIT => $SIG{QUIT}, TERM => $SIG{TERM} );
+	my $sighandler = sub {
+		$SIG{$_} = $defaultsig{$_} foreach keys %defaultsig;
+		warn localtime . " - Exit signal, not accepting new calls and scheduling call hangups...\n";
+		foreach my $call (grep { defined $_ } values %calls) {
+			$call->add_timer(15, sub { $call->bye() if defined $call });
+			$stopping = 1;
+		}
+		if ($stopping) {
+			warn localtime . " - Scheduling global stop in 20 seconds\n";
+			$ua->add_timer(20, sub {
+				warn localtime . " - Stopping main loop...\n";
+				$stop = 1;
+			});
+		} else {
+			warn localtime . " - Stopping main loop...\n";
+			$stop = 1;
+		}
+	};
+	local ($SIG{INT}, $SIG{QUIT}, $SIG{TERM}) = ($sighandler, $sighandler, $sighandler);
 	warn localtime . " - Starting main loop...\n";
 	$ua->loop(undef, \$stop);
 	$ua->cleanup();
