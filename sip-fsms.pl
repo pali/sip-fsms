@@ -10,7 +10,7 @@ use MIME::Base64 qw(encode_base64);
 use Storable qw(retrieve store);
 use Time::Local qw(timegm timelocal);
 
-use Net::SIP 0.813 qw(create_rtp_sockets invoke_callback ip_canonical laddr4dst sip_hdrval2parts sip_uri2parts);
+use Net::SIP 0.816 qw(create_rtp_sockets invoke_callback ip_canonical laddr4dst sip_hdrval2parts sip_uri2parts);
 use Number::Phone::Country 'noexport';
 use Number::Phone::Lib;
 
