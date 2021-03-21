@@ -1924,18 +1924,21 @@ sub protocol_sip_loop {
 		},
 		cb_create => sub {
 			my ($call, $request, $leg, $from) = @_;
+			my $param = $call->{param};
 			# This is the only callback which provides peer socket address
-			$call->{param}->{fsms_peer_addr} = $from->{addr};
+			$param->{fsms_peer_addr} = $from->{addr};
 			return 1;
 		},
 		cb_invite => sub {
 			my ($call, $request) = @_;
+			my $param = $call->{param};
+
 			my ($rtp_port, $rtp_sock, $rtcp_sock) = create_rtp_sockets($rtp_listen_addr, 2, $rtp_listen_min_port, $rtp_listen_max_port);
 			$rtp_sock or do { warn localtime . " - Error: Cannot create rtp socket at $rtp_listen_addr: $!\n"; $call->cleanup(); return $request->create_response('503', 'Service Unavailable'); };
 			$rtcp_sock or do { warn localtime . " - Error: Cannot create rtcp socket at $rtp_listen_addr: $!\n"; $call->cleanup(); return $request->create_response('503', 'Service Unavailable'); };
 
 			my ($codec, $sdp_addr_peer, $fmt_peer, $ptime_peer);
-			my $sdp_peer = $call->{param}->{sdp_peer};
+			my $sdp_peer = $param->{sdp_peer};
 			if ($sdp_peer) {
 				my @media_peer = $sdp_peer->get_media();
 				foreach my $i (0..$#media_peer) {
@@ -1975,7 +1978,7 @@ sub protocol_sip_loop {
 			my $fmt = $fmt_peer;
 			my $ptime = ($rtp_ptime eq 'peer') ? $ptime_peer : $rtp_ptime;
 			my $sdp_addr = defined $rtp_public_addr ? $rtp_public_addr : laddr4dst($sdp_addr_peer);
-			my $contact_addr = defined $sip_public_addr ? $sip_public_addr : laddr4dst($call->{param}->{fsms_peer_addr});
+			my $contact_addr = defined $sip_public_addr ? $sip_public_addr : laddr4dst($param->{fsms_peer_addr});
 
 			my $sdp = Net::SIP::SDP->new(
 				{
@@ -1993,10 +1996,10 @@ sub protocol_sip_loop {
 					],
 				},
 			);
-			$call->{param}->{rtp_param} = [ $fmt, int(8000*$ptime/1000), $ptime/1000 ];
-			$call->{param}->{sdp} = $sdp;
-			$call->{param}->{media_lsocks} = [ [ $rtp_sock, $rtcp_sock ] ];
-			$call->{param}->{fsms_codec} = $codec;
+			$param->{rtp_param} = [ $fmt, int(8000*$ptime/1000), $ptime/1000 ];
+			$param->{sdp} = $sdp;
+			$param->{media_lsocks} = [ [ $rtp_sock, $rtcp_sock ] ];
+			$param->{fsms_codec} = $codec;
 
 			return $request->create_response('200', 'OK', { contact => "$sip_proto_uri:$contact_addr:$sip_public_port" }, $sdp);
 		},
@@ -2023,9 +2026,9 @@ sub protocol_sip_loop {
 
 			$to_uri = $sip_number if defined $sip_number;
 
-			my $codec = $call->{param}->{fsms_codec};
-			my $fmt = $call->{param}->{rtp_param}->[0];
-			my $buffer_size = $call->{param}->{rtp_param}->[1];
+			my $codec = $param->{fsms_codec};
+			my $fmt = $param->{rtp_param}->[0];
+			my $buffer_size = $param->{rtp_param}->[1];
 			my $finish = 0;
 			my $established = 0;
 			my $stop_send_receive = 0;
