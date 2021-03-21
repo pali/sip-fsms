@@ -2034,9 +2034,8 @@ sub protocol_sip_loop {
 			my $stop_send_receive = 0;
 			my $state = process_audio_init();
 
-			my $hangup = sub {
-				warn localtime . " - Hangup\n";
-				delete $param->{fsms_hangup};
+			my $cleanup = sub {
+				delete $param->{fsms_cleanup};
 				my $state = delete $param->{fsms_state};
 				my $timer = delete $param->{fsms_timer};
 				process_audio_finish($state) if defined $state;
@@ -2047,7 +2046,8 @@ sub protocol_sip_loop {
 
 			my $timer = $call->add_timer(5, sub {
 				warn localtime . " - No RTP packet received for 5 seconds\n";
-				$hangup->();
+				warn localtime . " - Hangup\n";
+				$cleanup->();
 				$call->bye();
 			});
 
@@ -2057,7 +2057,7 @@ sub protocol_sip_loop {
 
 			$param->{fsms_state} = $state;
 			$param->{fsms_timer} = $timer;
-			$param->{fsms_hangup} = $hangup;
+			$param->{fsms_cleanup} = $cleanup;
 
 			my $tpdu_callback = sub {
 				my ($payload, @tpdu_data) = @_;
@@ -2075,7 +2075,8 @@ sub protocol_sip_loop {
 				$silence_packets = @remaining_buffer ? 0 : $silence_packets+1;
 				$finish = process_silence_receive_mode($state, $role, \@current_message, \@remaining_buffer, $finish, $established, $silence_packets*$buffer_size/8000);
 				if (not @remaining_buffer and $finish) {
-					$hangup->();
+					warn localtime . " - Hangup\n";
+					$cleanup->();
 					$call->bye();
 					return;
 				}
@@ -2105,16 +2106,23 @@ sub protocol_sip_loop {
 			my $rtp = $call->rtp('media_send_recv', $send_callback, 1, $receive_callback);
 			return invoke_callback($rtp, $call, $param);
 		},
+		cb_rtp_done => sub {
+			# Do nothing, send_callback handle bye
+		},
 		recv_bye => sub {
 			my ($param) = @_;
-			warn localtime . " - Received bye\n";
-			$param->{fsms_hangup}->() if exists $param->{fsms_hangup};
+			warn localtime . " - Other side hangup\n";
+			$param->{fsms_cleanup}->() if exists $param->{fsms_cleanup};
+		},
+		send_bye => sub {
+			my ($param) = @_;
+			warn localtime . " - Call ended\n";
 		},
 		cb_cleanup => sub {
 			my ($call) = @_;
 			my $param = $call->{param};
-			my $hangup = delete $param->{fsms_hangup};
-			$hangup->() if defined $hangup;
+			my $cleanup = delete $param->{fsms_cleanup};
+			$cleanup->() if defined $cleanup;
 		},
 	);
 
