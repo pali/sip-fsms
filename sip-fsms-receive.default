@@ -18,8 +18,8 @@
 # Country code for national telephone numbers
 #DAEMON_ARGS="$DAEMON_ARGS --country=CZ"
 
-# Overwrite telephone number of receiver
-#DAEMON_ARGS="$DAEMON_ARGS --sip-number=123456789"
+# Overwrite telephone number of receiver and service center
+#DAEMON_ARGS="$DAEMON_ARGS --local-te-number=123456789 --remote-sc-number=14700"
 
 # Store received SMS to disk directory
 #DAEMON_ARGS="$DAEMON_ARGS --store-to-dir=/var/sms/"

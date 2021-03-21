@@ -1890,13 +1890,50 @@ sub ip_addr_is_invalid {
 	return ($addr =~ /^(?:0|22[4-9]|2[3-5][0-9])\./) ? 1 : 0;
 }
 
+sub parse_call_identity {
+	my ($candidates, $headers) = @_;
+	foreach my $candidate (@{$candidates}) {
+		return $candidate unless ref $candidate;
+		my ($hdr, $what) = @{$candidate};
+		next unless exists $headers->{$hdr};
+		foreach my $hdr_val (reverse @{$headers->{$hdr}}) {
+			my $number;
+			if ($what =~ /^(?:name|user|tel)$/) {
+				my ($hdr_parts, $hdr_data) = sip_hdrval2parts($hdr => $hdr_val);
+				next unless defined $hdr_parts;
+				my ($hdr_addr, $hdr_name) = sip_split_name_addr($hdr_parts);
+				if ($what eq 'name') {
+					$number = $hdr_name;
+				} elsif ($what eq 'user') {
+					next unless defined $hdr_addr;
+					(undef, $number) = sip_uri2parts($hdr_addr);
+				} elsif ($what eq 'tel') {
+					next unless $hdr_addr =~ /^tel:(.+)$/;
+					$number = $1;
+					my $prefix = exists $hdr_data->{'phone-context'} ? $hdr_data->{'phone-context'} : undef;
+					$number = $prefix . $number if defined $prefix and $prefix =~ /^([-.()0-9*#a-cA-C]+)$/;
+				}
+			} else {
+				($number) = grep { defined($_) } $hdr_val =~ /$what/;
+			}
+			next unless defined $number;
+			$number =~ s/[-.()]//g;
+			return $number if length $number and $number =~ /^\+?[0-9*#a-cA-C]+$/;
+		}
+	}
+	return;
+}
+
 sub protocol_sip_loop {
 	my (%options) = @_;
 	my $role = $options{role};
 	my $country = $options{country};
 	my $frag_cache_file = $options{frag_cache_file};
 	my $frag_cache_expire = $options{frag_cache_expire};
-	my $sip_number = $options{sip_number};
+	my $local_sc_number = $options{local_sc_number};
+	my $local_te_number = $options{local_te_number};
+	my $remote_sc_number = $options{remote_sc_number};
+	my $remote_te_number = $options{remote_te_number};
 	my $sip_identity = $options{sip_identity};
 	my $sip_accept_uri_re = $options{sip_accept_uri_re};
 	my $sip_proto = $options{sip_proto};
@@ -2034,31 +2071,13 @@ sub protocol_sip_loop {
 			$param->{sdp} = $sdp;
 			$param->{media_lsocks} = [ [ $rtp_sock, $rtcp_sock ] ];
 			$param->{fsms_codec} = $codec;
+			$param->{fsms_headers} = $request->get_header();
+			$param->{fsms_headers}->{request} = [ ($request->as_parts)[1] ];
 
 			return $request->create_response('200', 'OK', { contact => "$sip_proto_uri:$contact_addr:$sip_public_port" }, $sdp);
 		},
 		init_media => sub {
 			my ($call, $param) = @_;
-
-			my $from = $call->get_peer;
-			my ($from_addr, $from_name) = sip_split_name_addr($from);
-			my ($from_domain, $from_user) = sip_uri2parts($from_addr);
-			$from_name = '' unless defined $from_name;
-			$from_user = '' unless defined $from_user;
-			$from_domain =~ s/:\w+$//;
-			# TODO: somehow encode also from_name
-			my $from_uri = (length $from_user) ? "$from_user\@$from_domain" : $from_domain;
-
-			my ($to) = sip_hdrval2parts(to => $call->{ctx}->{to});
-			my ($to_addr, $to_name) = sip_split_name_addr($to);
-			my ($to_domain, $to_user) = sip_uri2parts($to_addr);
-			$to_name = '' unless defined $to_name;
-			$to_user = '' unless defined $to_user;
-			$to_domain =~ s/:\w+$//;
-			# TODO: somehow encode also to_name
-			my $to_uri = (length $to_user) ? "$to_user\@$to_domain" : $to_domain;
-
-			$to_uri = $sip_number if defined $sip_number;
 
 			my $codec = $param->{fsms_codec};
 			my $fmt = $param->{rtp_param}->[0];
@@ -2095,8 +2114,11 @@ sub protocol_sip_loop {
 
 			my $tpdu_callback = sub {
 				my ($payload, @tpdu_data) = @_;
-				my $mti = $tpdu_data[1];
-				my ($smsc, $smte) = ($mti == 1) ? ($to_uri, $from_uri) : ($from_uri, $to_uri);
+				my $mti = $tpdu_data[1] || 0;
+				my $dir = ($role eq 'te') ? 0 : ($role eq 'sc') ? 1 : ($mti == 1) ? 1 : 0;
+				my $smsc = parse_call_identity(($dir ? $local_sc_number : $remote_sc_number), $param->{fsms_headers});
+				my $smte = parse_call_identity(($dir ? $remote_te_number : $local_te_number), $param->{fsms_headers});
+				# TODO: process Status Report with $mti == 2
 				process_frag_message($smte, $smsc, $country, $payload, @tpdu_data);
 				return;
 			};
@@ -2185,7 +2207,12 @@ Options:
   --role=te|sc|dual        Process role: te - Terminal Equipment, sc - Service Center, dual - Dual role based on incoming data (default dual)
   --country=code           Country code for telephone numbers normalization (default none - no normalization)
   --frag-cache=loc,expire  Parts of fragmented messages can be stored either persistant disk file or only in process memory (string "mem") or disabled (string "none"). Incomplete parts expire after specified time (in minutes) and/or at process exit (string "atexit"). Default "mem,1440,atexit"
-  --sip-number=number      SIP number (default extracted from incoming call SIP To: header)
+  --local-number=list      List of SIP headers from which is retrieved local receiver telephone number, syntax: header:name|user|tel|/regex/ OR fixed-number OR none (default diversion:tel,diversion:user,to:tel,to:user,request:tel,request:user)
+  --remote-number=list     List of SIP headers from which is retrieved remote caller telephone number (default p-asserted-identity:tel,p-asserted-identity:user,p-preferred-identity:tel,p-preferred-identity:user,from:tel,from:user)
+  --local-te-number=list   --local-number for te when receiver is in te role (default --local-number)
+  --remote-sc-number=list  --remote-number for sc when receiver is in te role (default --remote-number)
+  --local-sc-number=list   --local-number for sc when receiver is in sc role (default --local-number)
+  --remote-te-number=list  --remote-number for te when receiver is in sc role (default --remtoe-number)
   --sip-identity=identity  SIP identity (default "F-SMS <sip:fsms\@localhost>")
   --sip-accept-uri=regex   Perl regex with SIP URIs for incoming calls (default ^.*\$)
   --sip-listen=format      format: proto:listen_addr:listen_port/public_addr:public_port (default proto=udp listen_addr=0.0.0.0 listen_port=default_for_proto public_addr=listen_addr public_port=listen_port)
@@ -2247,7 +2274,36 @@ my $sip_public_addr = (defined $4) ? $4 : $sip_listen_addr;
 $sip_public_addr = undef if ip_canonical($sip_public_addr) =~ /^(?:0.0.0.0|::)$/;
 my $sip_public_port = (defined $5) ? $5 : $sip_listen_port;
 
-my $sip_number = exists $options{'sip-number'} ? delete $options{'sip-number'} : undef;
+sub parse_number_option {
+	my ($option, $default) = @_;
+	my $number = exists $options{$option} ? delete $options{$option} : $default;
+	return $number if ref $number;
+	$number = $number . $default if $number =~ /,$/;
+	$number = $default . $number if $number =~ /^,/;
+	my @number;
+	if (defined $number) {
+		my @parts = split /(?<!\\),/, $number;
+		$_ =~ s/\\,/,/g foreach @parts;
+		@parts = () if @parts == 1 and $parts[0] eq 'none';
+		die "$0: Invalid format for --$option\n" if @parts > 1 and grep { $_ !~ /^[^:]+:(?:name|user|tel|\/.*\/)$/ } @parts;
+		foreach (@parts) {
+			if ($_ =~ /^([^:]+):(.*)$/) {
+				push @number, [ lc $1, ($2 =~ /^\/(.*)\/$/) ? qr/$1/ : $2 ];
+			} else {
+				die "$0: Invalid fixed number in --$option\n" unless $_ =~ /^\+?[0-9*#a-cA-C]+$/;
+				push @number, $_;
+			}
+		}
+	}
+	return \@number;
+}
+my $local_number = parse_number_option('local-number', 'diversion:tel,diversion:user,to:tel,to:user,request:tel,request:user');
+my $local_sc_number = parse_number_option('local-sc-number', $local_number);
+my $local_te_number = parse_number_option('local-te-number', $local_number);
+my $remote_number = parse_number_option('remote-number', 'p-asserted-identity:tel,p-asserted-identity:user,p-preferred-identity:tel,p-preferred-identity:user,from:tel,from:user');
+my $remote_sc_number = parse_number_option('remote-sc-number', $remote_number);
+my $remote_te_number = parse_number_option('remote-te-number', $remote_number);
+
 my $sip_identity = exists $options{'sip-identity'} ? delete $options{'sip-identity'} : ('F-SMS <' . (($sip_proto eq 'tls') ? 'sips' : 'sip') . ':fsms@localhost>');
 my $sip_accept_uri_re = exists $options{'sip-accept-uri'} ? delete $options{'sip-accept-uri'} : undef;
 $sip_accept_uri_re = qr/$sip_accept_uri_re/ if defined $sip_accept_uri_re;
@@ -2299,7 +2355,10 @@ protocol_sip_loop(
 	country => $country,
 	frag_cache_file => $frag_cache_file,
 	frag_cache_expire => $frag_cache_expire,
-	sip_number => $sip_number,
+	local_sc_number => $local_sc_number,
+	local_te_number => $local_te_number,
+	remote_sc_number => $remote_sc_number,
+	remote_te_number => $remote_te_number,
 	sip_identity => $sip_identity,
 	sip_accept_uri_re => $sip_accept_uri_re,
 	sip_proto => $sip_proto,
