@@ -1241,7 +1241,7 @@ sub process_audio_finish {
 	# TODO
 }
 
-sub process_audio_sample {
+sub decode_audio_sample {
 	my ($state, $sample) = @_;
 	my $smtl_buffer = $state->{smtl_buffer};
 	my ($status, $noext, $type, $payload, $checksum) = smdll_decode($state, $sample);
@@ -1256,11 +1256,12 @@ sub process_audio_sample {
 
 #####
 
-sub process_audio_sample_receive_mode {
-	my ($state, $role, $tpdu_callback, $current_message, $remaining_buffer, $finish, $sample) = @_;
-	my ($status, $type, $payload, @tpdu_data) = process_audio_sample($state, $sample);
+sub process_audio_sample {
+	my ($state, $mode, $role, $tpdu_callback, $current_message, $remaining_buffer, $finish, $sample) = @_;
+	my ($status, $type, $payload, @tpdu_data) = decode_audio_sample($state, $sample);
 	return ($finish, $status) unless defined $status and not $finish;
 	my @next_message;
+	my $next_message_prepend_only = 0;
 	my $next_message_wait_before = 0.5;
 	my $next_message_wait_after = 0;
 	if ($status == $smdll_decode_error_types{NO_ERROR} and defined $type) {
@@ -1311,7 +1312,7 @@ sub process_audio_sample_receive_mode {
 						$fcs = 0xB0; # TPDU not supported
 						$err = 'unsupported TPDU MTI';
 					} else {
-						$fcs = $tpdu_callback->($payload, @tpdu_data);
+						$fcs = $tpdu_callback->(1, $type, $payload, @tpdu_data);
 						$err = 'TPDU callback' if defined $fcs;
 					}
 					if (defined $fcs) {
@@ -1331,7 +1332,7 @@ sub process_audio_sample_receive_mode {
 						$fcs = 0xB0; # TPDU not supported
 						$err = 'unsupported TPDU MTI';
 					} else {
-						$fcs = $tpdu_callback->($payload, @tpdu_data);
+						$fcs = $tpdu_callback->(1, $type, $payload, @tpdu_data);
 						$err = 'TPDU callback' if defined $fcs;
 					}
 					if (defined $fcs) {
@@ -1343,7 +1344,7 @@ sub process_audio_sample_receive_mode {
 						@next_message = smdll_encode_ack(tpdu_encode_deliver_ack());
 					}
 				} else {
-					my $fcs = $tpdu_callback->($payload, @tpdu_data);
+					my $fcs = $tpdu_callback->(1, $type, $payload, @tpdu_data);
 					my $fcs_str = (defined $fcs) ? (sprintf "0x%02X", $fcs) : undef;
 					if (defined $mti and $mti == 1) {
 						if (defined $fcs) {
@@ -1364,16 +1365,13 @@ sub process_audio_sample_receive_mode {
 					}
 				}
 			}
-		} elsif ($type == $smdll_types{EST}) {
-			warn localtime . " - Received connection established\n";
-			$state->{send_error_count} = 0;
 		} elsif ($type == $smdll_types{REL}) {
 			warn localtime . " - Received connection released\n";
 			$state->{send_error_count} = 0;
 			@{$remaining_buffer} = ();
 			$finish = 1;
 		} else {
-			warn localtime . " - Received unknown SM-DLL message\n";
+			warn localtime . " - Received unknown SM-DLL message " . (sprintf '0x%02x', $type) . "\n";
 			warn localtime . " - Sending error unknown type\n";
 			$state->{send_error_count} = 0;
 			@next_message = smdll_encode_error($smdll_error_types{UNKNOWN_TYPE});
@@ -1396,22 +1394,24 @@ sub process_audio_sample_receive_mode {
 		} else {
 			warn localtime . " - Sending error wrong checksum\n";
 			@next_message = smdll_encode_error($smdll_error_types{WRONG_CHECKSUM});
+			$next_message_prepend_only = 1;
 		}
 	}
 	if (@next_message) {
-		@{$current_message} = @next_message;
+		@{$current_message} = @next_message unless $next_message_prepend_only;
 		push @{$remaining_buffer}, (0) x int(8000*$next_message_wait_before), @next_message, (0) x int(8000*$next_message_wait_after);
 	}
 	return ($finish, $status);
 }
 
-sub process_silence_receive_mode {
-	my ($state, $role, $current_message, $remaining_buffer, $finish, $established, $silence) = @_;
-	return $finish if @{$remaining_buffer} or $finish or $silence < 4;
+sub process_timeout {
+	my ($state, $mode, $role, $current_message, $remaining_buffer, $finish, $established, $timeout) = @_;
+	return $finish if @{$remaining_buffer} or $finish or $timeout < 4;
 	my @next_message;
+	my $next_message_prepend_only = 0;
 	my $next_message_wait_before = @{$remaining_buffer} ? 0.5 : 0;
 	my $next_message_wait_after = 0;
-	warn localtime . " - Silence for 4 seconds while waiting for response\n";
+	warn localtime . " - 4 seconds timeout while waiting for response\n";
 	if ($state->{send_error_count}++ >= 4 or $state->{receive_error_count}++ >= 4) {
 		warn localtime . " - Failed to send or receive message 4 times\n";
 		warn localtime . " - Sending connection released\n";
@@ -1425,9 +1425,10 @@ sub process_silence_receive_mode {
 	} else {
 		warn localtime . " - Sending error wrong checksum\n";
 		@next_message = smdll_encode_error($smdll_error_types{WRONG_CHECKSUM});
+		$next_message_prepend_only = 1;
 	}
 	if (@next_message) {
-		@{$current_message} = @next_message;
+		@{$current_message} = @next_message unless $next_message_prepend_only;
 		push @{$remaining_buffer}, (0) x int(8000*$next_message_wait_before), @next_message, (0) x int(8000*$next_message_wait_after);
 	}
 	return $finish;
@@ -1936,6 +1937,7 @@ sub parse_call_identity {
 
 sub protocol_sip_loop {
 	my (%options) = @_;
+	my $mode = $options{mode};
 	my $role = $options{role};
 	my $country = $options{country};
 	my $frag_cache_file = $options{frag_cache_file};
@@ -2219,7 +2221,7 @@ sub protocol_sip_loop {
 			$param->{fsms_cleanup} = $cleanup;
 
 			my $tpdu_callback = sub {
-				my ($payload, @tpdu_data) = @_;
+				my ($no_erorr, $type, $payload, @tpdu_data) = @_;
 				my $mti = $tpdu_data[1] || 0;
 				my $dir = ($role eq 'te') ? 0 : ($role eq 'sc') ? 1 : ($mti == 1) ? 1 : 0;
 				my $smsc = parse_call_identity(($dir ? $local_sc_number : $remote_sc_number), $param->{fsms_headers});
@@ -2229,13 +2231,13 @@ sub protocol_sip_loop {
 				return;
 			};
 
-			my $silence_packets = 0;
+			my $timeout_packets = 0;
 			my $send_callback = sub {
 				my ($seq, $channel) = @_;
 				return if $stop_send_receive;
 
-				$silence_packets = @remaining_buffer ? 0 : $silence_packets+1;
-				$finish = process_silence_receive_mode($state, $role, \@current_message, \@remaining_buffer, $finish, $established, $silence_packets*$buffer_size/8000);
+				$timeout_packets = @remaining_buffer ? 0 : $timeout_packets+1;
+				$finish = process_timeout($state, $mode, $role, \@current_message, \@remaining_buffer, $finish, $established, $timeout_packets*$buffer_size/8000);
 				if (not @remaining_buffer and $finish) {
 					warn localtime . " - Hangup\n";
 					$cleanup->();
@@ -2257,7 +2259,7 @@ sub protocol_sip_loop {
 
 				my @receive_buffer = map { ($codec eq 'alaw') ? $alaw_expandtab[$_] : $ulaw_expandtab[$_] } unpack 'C*', $payload;
 				for (@receive_buffer) {
-					($finish, my $status) = process_audio_sample_receive_mode($state, $role, $tpdu_callback, \@current_message, \@remaining_buffer, $finish, $_);
+					($finish, my $status) = process_audio_sample($state, $mode, $role, $tpdu_callback, \@current_message, \@remaining_buffer, $finish, $_);
 					$established = 1 if defined $status;
 				}
 
@@ -2499,6 +2501,7 @@ if (defined $frag_cache_file) {
 }
 
 protocol_sip_loop(
+	mode => $mode,
 	role => $role,
 	country => $country,
 	frag_cache_file => $frag_cache_file,
