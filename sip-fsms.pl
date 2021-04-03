@@ -1947,6 +1947,11 @@ sub protocol_sip_loop {
 	my $sip_identity = $options{sip_identity};
 	my $sip_accept_uri_re = $options{sip_accept_uri_re};
 	my $sip_proto = $options{sip_proto};
+	my $sip_auth_user = $options{sip_auth_user};
+	my $sip_auth_pass = $options{sip_auth_pass};
+	my $sip_register_host = $options{sip_register_host};
+	my $sip_register_port = $options{sip_register_port};
+	my @sip_register_timeout = @{$options{sip_register_timeout}};
 	my $sip_listen_addr = $options{sip_listen_addr};
 	my $sip_listen_port = $options{sip_listen_port};
 	my $sip_public_addr = $options{sip_public_addr};
@@ -1964,14 +1969,73 @@ sub protocol_sip_loop {
 	my $leg = Net::SIP::Leg->new(proto => $sip_proto, addr => $sip_listen_addr, port => $sip_listen_port);
 	die "Error: Cannot create leg at $sip_proto:$sip_listen_addr:$sip_listen_port: $!\n" unless defined $leg;
 
-	my $ua = Net::SIP::Simple->new(from => $sip_identity, legs => [ $leg ]);
+	my $sip_registrar = defined $sip_register_host ? $sip_register_host . ($sip_register_port ? ":$sip_register_port" : '') : undef;
+	my $sip_auth = defined $sip_auth_user ? [ $sip_auth_user, $sip_auth_pass ] : undef;
+	my $ua = Net::SIP::Simple->new(from => $sip_identity, registrar => $sip_registrar, auth => $sip_auth, legs => [ $leg ]);
 	die "Error: Cannot create user agent for $sip_identity: $!\n" unless defined $ua;
-
-	$ua->add_timer(30*60, sub { process_frag_cache($frag_cache_expire, $country) }, 30*60, 'process_frag_cache') if $frag_cache_expire;
 
 	my $stop;
 	my $stopping;
 	my %calls;
+
+	my $stop_cb = sub {
+		warn localtime . " - Stopping main loop...\n";
+		$stop = 1;
+	};
+
+	if (defined $sip_register_host) {
+		my $registered;
+		my $init_registered;
+		my $register_timer;
+		my $sub_register;
+		my $cb_register = sub {
+			my ($status, %info) = @_;
+			return if $stopping;
+			$registered = ($status eq 'OK');
+			my $packet = exists $info{packet} ? $info{packet} : undef;
+			$register_timer->cancel() if defined $register_timer;
+			my $next = $sip_register_timeout[2];
+			if ($status eq 'OK') {
+				my $expires = $info{expires};
+				$next = ($sip_register_timeout[0] and $sip_register_timeout[0] < $expires) ? $sip_register_timeout[0] : $expires;
+				warn localtime . " - Registration to $sip_registrar successful, expires in $expires seconds\n";
+			} elsif (exists $info{code} and defined $info{code}) {
+				my $msg = defined $packet ? $packet->msg() : '';
+				warn localtime . " - Registration to $sip_registrar failed: $info{code} $msg\n";
+			} elsif (exists $info{errno} and defined $info{errno} and $info{errno} =~ /^[1-9][0-9]*$/) {
+				$! = int($info{errno});
+				warn localtime . " - Registration to $sip_registrar failed: $!\n";
+			} else {
+				my $error = $ua->error();
+				warn localtime . " - Registration to $sip_registrar failed: $error\n";
+			}
+			$init_registered = 1 if not $init_registered and $registered;
+			if (not $init_registered) {
+				if ($sip_register_timeout[1] == 1) {
+					$init_registered = -1;
+					return;
+				}
+				$sip_register_timeout[1]-- if $sip_register_timeout[1] > 1;
+			}
+			warn localtime . " - Next register in $next seconds\n";
+			$next-- if $next > 1;
+			$register_timer = $ua->add_timer($next, $sub_register);
+		};
+		$sub_register = sub {
+			return if $stopping;
+			$register_timer->cancel() if defined $register_timer;
+			$register_timer = $ua->add_timer(60, sub { $cb_register->('FAIL', errno => 110) });
+			$ua->register(expires => $sip_register_timeout[0], cb_final => $cb_register);
+		};
+		warn localtime . " - Registering to $sip_registrar...\n";
+		$sub_register->();
+		if ($sip_register_timeout[1]) {
+			$ua->loop(\$init_registered);
+			die "$0: Cannot register to $sip_registrar\n" if $init_registered <= 0;
+		}
+	}
+
+	$ua->add_timer(30*60, sub { process_frag_cache($frag_cache_expire, $country) }, 30*60, 'process_frag_cache') if $frag_cache_expire;
 
 	$ua->listen(
 		filter => sub {
@@ -2207,8 +2271,7 @@ sub protocol_sip_loop {
 			delete $calls{$refaddr};
 			if ($stopping and not grep { defined $_ } values %calls) {
 				warn localtime . " - All calls ended\n";
-				warn localtime . " - Stopping main loop...\n";
-				$stop = 1;
+				$stop_cb->();
 			}
 		},
 	);
@@ -2223,17 +2286,19 @@ sub protocol_sip_loop {
 		}
 		if ($stopping) {
 			warn localtime . " - Scheduling global stop in 20 seconds\n";
-			$ua->add_timer(20, sub {
-				warn localtime . " - Stopping main loop...\n";
-				$stop = 1;
-			});
+			$ua->add_timer(20, $stop_cb);
 		} else {
-			warn localtime . " - Stopping main loop...\n";
-			$stop = 1;
+			if (defined $sip_register_host) {
+				warn localtime . " - Unregistering from $sip_registrar...\n";
+				$ua->register(expires => 0, cb_final => $stop_cb);
+				$ua->add_timer(5, $stop_cb);
+			} else {
+				$stop_cb->();
+			}
 		}
 	};
 	local ($SIG{INT}, $SIG{QUIT}, $SIG{TERM}) = ($sighandler, $sighandler, $sighandler);
-	warn localtime . " - Starting main loop...\n";
+	warn localtime . " - Starting main loop and listening at $sip_proto:$sip_listen_addr:$sip_listen_port\n";
 	$ua->loop(undef, \$stop);
 	$ua->cleanup();
 	warn localtime . " - Stopped\n";
@@ -2263,6 +2328,8 @@ Options:
   --remote-te-number=list  --remote-number for te when receiver is in sc role (default --remtoe-number)
   --sip-identity=identity  SIP identity (default "F-SMS <sip:fsms\@localhost>")
   --sip-accept-uri=regex   Perl regex with SIP URIs for incoming calls (default ^.*\$)
+  --sip-register=format    format: proto:user:pass\@host:port (default without registration)
+  --sip-register-timeout=f format: expires,init,retry  expires - register expiration (0 - server default), init - initial register attemps, retry - timeout after failed registration (default expires=0 init=1 retry=30)
   --sip-listen=format      format: proto:listen_addr:listen_port/public_addr:public_port (default proto=udp listen_addr=0.0.0.0 listen_port=default_for_proto public_addr=listen_addr public_port=listen_port)
   --rtp-listen=format      format: listen_addr:listen_min_port-listen_max_port/public_addr:public_min_port (default address is sip-listen with whole port range)
   --rtp-codecs=codecs      List of allowed codecs separated by comma, chosen codec is by peer preference (default ulaw,alaw)
@@ -2313,13 +2380,28 @@ my $frag_cache_expire = (defined $2) ? $2 : 1440;
 my $frag_cache_disabled = ($1 eq 'none');
 my $frag_cache_expire_atexit = (defined $3 or $1 eq 'mem');
 
+my $sip_register = exists $options{'sip-register'} ? delete $options{'sip-register'} : '';
+die "$0: Invalid --sip-register $sip_register\n" unless $sip_register =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^:]*)(?::([0-9]+))?$/;
+my $sip_register_proto = $1;
+my $sip_auth_user = $2;
+my $sip_auth_pass = $3;
+my $sip_register_host = (length $4) ? $4 : undef;
+my $sip_register_port = (defined $5) ? $5 : undef;
+my $sip_register_timeout = exists $options{'sip-register-timeout'} ? delete $options{'sip-register-timeout'} : '';
+die "$0: Invalid --sip-register-timeout $sip_register_timeout\n" unless $sip_register_timeout =~ /^(?:([1-9][0-9]*)(?:,([0-9]+)(?:,([1-9][0-9]*))))?$/;
+my @sip_register_timeout = split /,/, $sip_register_timeout;
+$sip_register_timeout[0] = 3600 unless defined $sip_register_timeout[0];
+$sip_register_timeout[1] = 1 unless defined $sip_register_timeout[1];
+$sip_register_timeout[2] = 30 unless defined $sip_register_timeout[2];
+
 my $sip_listen = exists $options{'sip-listen'} ? delete $options{'sip-listen'} : '';
-die "$0: Invalid --sip-listen option $sip_listen\n" unless $sip_listen =~ /^(?:(tcp|udp|tls):)?([^\[\]<>:]*|\[[^\[\]<>]*\])(?::([0-9]+))?(?:\/([^\[\]<>:]*|\[[^\[\]<>]*\])(?::([0-9]+))?)?$/;
-my $sip_proto = (defined $1) ? $1 : 'udp';
+die "$0: Invalid --sip-listen option $sip_listen\n" unless $sip_listen =~ /^(?:(tcp|udp|tls):)?([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?(?:\/([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?)?$/;
+my $sip_proto = (defined $1) ? $1 : (defined $sip_register_proto) ? $sip_register_proto : 'udp';
+die "$0: Protocol for --sip-listen and --sip-register does not match\n" if defined $sip_proto and defined $sip_register_proto and $sip_proto ne $sip_register_proto;
 my $sip_listen_addr = (length $2) ? $2 : '0.0.0.0';
 my $sip_listen_port = (defined $3) ? $3 : ($sip_proto eq 'tls') ? 5061 : 5060;
-my $sip_public_addr = (defined $4) ? $4 : $sip_listen_addr;
-$sip_public_addr = undef if ip_canonical($sip_public_addr) =~ /^(?:0.0.0.0|::)$/;
+my $sip_public_addr = (defined $4 and length $4) ? $4 : $sip_listen_addr;
+$sip_public_addr = undef if defined $sip_public_addr and ip_canonical($sip_public_addr) =~ /^(?:0\.0\.0\.0|::)$/;
 my $sip_public_port = (defined $5) ? $5 : $sip_listen_port;
 
 sub parse_number_option {
@@ -2356,14 +2438,14 @@ my $sip_identity = exists $options{'sip-identity'} ? delete $options{'sip-identi
 my $sip_accept_uri_re = exists $options{'sip-accept-uri'} ? delete $options{'sip-accept-uri'} : undef;
 $sip_accept_uri_re = qr/$sip_accept_uri_re/ if defined $sip_accept_uri_re;
 
-my $rtp_listen = exists $options{'rtp-listen'} ? delete $options{'rtp-listen'} : $sip_listen_addr;
-die "$0: Invalid --rtp-listen option $rtp_listen\n" unless $rtp_listen =~ /^([^\[\]<>:]*|\[[^\[\]<>]*\])(?::([0-9]+)-([0-9]+))?(?:\/([^\[\]<>:]*|\[[^\[\]<>]*\])(?::([0-9]+))?)?$/;
+my $rtp_listen = exists $options{'rtp-listen'} ? delete $options{'rtp-listen'} : defined $sip_listen_addr ? $sip_listen_addr : '';
+die "$0: Invalid --rtp-listen option $rtp_listen\n" unless $rtp_listen =~ /^([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+)-([0-9]+))?(?:\/([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?)?$/;
 my $rtp_listen_addr = (length $1) ? $1 : $sip_listen_addr;
 my $rtp_listen_min_port = (defined $2) ? $2 : $Net::SIP::Util::RTP_MIN_PORT;
 my $rtp_listen_max_port = (defined $3) ? $3 : $Net::SIP::Util::RTP_MAX_PORT;
 die "$0: Invalid RTP listen max port $rtp_listen_max_port\n" if $rtp_listen_max_port < $rtp_listen_min_port+1 or $rtp_listen_max_port >= 2**16;
-my $rtp_public_addr = (defined $4) ? $4 : $rtp_listen_addr;
-$rtp_public_addr = undef if ip_canonical($rtp_public_addr) =~ /^(?:0.0.0.0|::)$/;
+my $rtp_public_addr = (defined $4 and length $4) ? $4 : $rtp_listen_addr;
+$rtp_public_addr = undef if defined $rtp_public_addr and ip_canonical($rtp_public_addr) =~ /^(?:0\.0\.0\.0|::)$/;
 my $rtp_public_port_offset = (defined $5) ? ($5-$rtp_listen_min_port) : 0;
 die "$0: Invalid RTP public min port $5\n" if $rtp_listen_max_port+$rtp_public_port_offset >= 2**16;
 
@@ -2410,6 +2492,11 @@ protocol_sip_loop(
 	sip_identity => $sip_identity,
 	sip_accept_uri_re => $sip_accept_uri_re,
 	sip_proto => $sip_proto,
+	sip_auth_user => $sip_auth_user,
+	sip_auth_pass => $sip_auth_pass,
+	sip_register_host => $sip_register_host,
+	sip_register_port => $sip_register_port,
+	sip_register_timeout => \@sip_register_timeout,
 	sip_listen_addr => $sip_listen_addr,
 	sip_listen_port => $sip_listen_port,
 	sip_public_addr => $sip_public_addr,
