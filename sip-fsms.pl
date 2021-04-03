@@ -11,7 +11,7 @@ use Scalar::Util qw(refaddr weaken);
 use Storable qw(retrieve store);
 use Time::Local qw(timegm timelocal);
 
-use Net::SIP 0.816 qw(create_rtp_sockets invoke_callback ip_canonical ip_parts2sockaddr ip_sockaddr2parts laddr4dst sip_hdrval2parts sip_uri2parts);
+use Net::SIP 0.816 qw(create_rtp_sockets INETSOCK invoke_callback ip_canonical ip_parts2sockaddr ip_sockaddr2parts laddr4dst sip_hdrval2parts sip_uri2parts);
 use Number::Phone::Country 'noexport';
 use Number::Phone::Lib;
 
@@ -1964,9 +1964,27 @@ sub protocol_sip_loop {
 	my @rtp_codecs = @{$options{rtp_codecs}};
 	my $rtp_ptime = $options{rtp_ptime};
 
+	my $sock_proto = ($sip_proto eq 'tls') ? 'tcp' : $sip_proto;
 	my $sip_proto_uri = ($sip_proto eq 'tls') ? 'sips' : 'sip';
 
-	my $leg = Net::SIP::Leg->new(proto => $sip_proto, addr => $sip_listen_addr, port => $sip_listen_port);
+	my $sock = INETSOCK(
+		Proto => $sock_proto,
+		LocalAddr => $sip_listen_addr,
+		LocalPort => $sip_listen_port,
+		Reuse => 1,
+		ReuseAddr => 1,
+		($sock_proto eq 'tcp') ? (
+			Listen => 100,
+		) : (),
+	);
+	die "Error: Cannot create local socket: $!\n" unless defined $sock;
+	$sip_listen_addr = $sock->sockhost();
+	$sip_listen_port = $sock->sockport();
+
+	my $contact_addr = defined $sip_public_addr ? $sip_public_addr : $sip_listen_addr;
+	my $contact_port = $sip_public_port ? $sip_public_port : $sip_listen_port;
+
+	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, contact => "$sip_proto_uri:$contact_addr:$contact_port");
 	die "Error: Cannot create leg at $sip_proto:$sip_listen_addr:$sip_listen_port: $!\n" unless defined $leg;
 
 	my $sip_registrar = defined $sip_register_host ? $sip_register_host . ($sip_register_port ? ":$sip_register_port" : '') : undef;
@@ -2399,7 +2417,7 @@ die "$0: Invalid --sip-listen option $sip_listen\n" unless $sip_listen =~ /^(?:(
 my $sip_proto = (defined $1) ? $1 : (defined $sip_register_proto) ? $sip_register_proto : 'udp';
 die "$0: Protocol for --sip-listen and --sip-register does not match\n" if defined $sip_proto and defined $sip_register_proto and $sip_proto ne $sip_register_proto;
 my $sip_listen_addr = (length $2) ? $2 : '0.0.0.0';
-my $sip_listen_port = (defined $3) ? $3 : ($sip_proto eq 'tls') ? 5061 : 5060;
+my $sip_listen_port = (defined $3) ? $3 : (defined $sip_register_host) ? undef : ($sip_proto eq 'tls') ? 5061 : 5060;
 my $sip_public_addr = (defined $4 and length $4) ? $4 : $sip_listen_addr;
 $sip_public_addr = undef if defined $sip_public_addr and ip_canonical($sip_public_addr) =~ /^(?:0\.0\.0\.0|::)$/;
 my $sip_public_port = (defined $5) ? $5 : $sip_listen_port;
