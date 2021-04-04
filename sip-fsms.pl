@@ -11,7 +11,7 @@ use Scalar::Util qw(refaddr weaken);
 use Storable qw(retrieve store);
 use Time::Local qw(timegm timelocal);
 
-use Net::SIP 0.816 qw(create_rtp_sockets INETSOCK invoke_callback ip_canonical ip_parts2sockaddr ip_sockaddr2parts laddr4dst sip_hdrval2parts sip_uri2parts);
+use Net::SIP 0.816 qw(create_rtp_sockets hostname2ip INETSOCK invoke_callback ip_canonical ip_parts2sockaddr ip_sockaddr2parts ip_string2parts laddr4dst sip_hdrval2parts sip_uri2parts);
 use Number::Phone::Country 'noexport';
 use Number::Phone::Lib;
 
@@ -2013,8 +2013,9 @@ sub protocol_sip_loop {
 		$stop = 1;
 	};
 
+	my $registered;
+	my $register_contact_addr;
 	if (defined $sip_register_host) {
-		my $registered;
 		my $init_registered;
 		my $register_timer;
 		my $sub_register;
@@ -2026,7 +2027,7 @@ sub protocol_sip_loop {
 			$register_timer->cancel() if defined $register_timer;
 			my $next = $sip_register_timeout[2];
 			if ($status eq 'OK') {
-				my $expires = $info{expires};
+				my $expires = $info{expires} || $sip_register_timeout[0];
 				$next = ($sip_register_timeout[0] and $sip_register_timeout[0] < $expires) ? $sip_register_timeout[0] : $expires;
 				warn localtime . " - Registration to $sip_registrar successful, expires in $expires seconds\n";
 			} elsif (exists $info{code} and defined $info{code}) {
@@ -2055,7 +2056,12 @@ sub protocol_sip_loop {
 			return if $stopping;
 			$register_timer->cancel() if defined $register_timer;
 			$register_timer = $ua->add_timer(60, sub { $cb_register->('FAIL', errno => 110) });
-			$ua->register(expires => $sip_register_timeout[0], cb_final => $cb_register);
+			if (ip_addr_is_wildcard($contact_addr)) {
+				my $dst_addr = hostname2ip((ip_string2parts(scalar sip_uri2parts($sip_register_host)))[0], $sock->sockdomain());
+				$dst_addr = ($contact_addr =~ /:/) ? '0100::' : '192.0.2.0' unless $dst_addr; # fallback to IPv6 Discard Prefix or IPv4 TEST-NET-1
+				$register_contact_addr = laddr4dst($dst_addr);
+			}
+			$ua->register(expires => $sip_register_timeout[0], cb_final => $cb_register, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()));
 		};
 		warn localtime . " - Registering to $sip_registrar...\n";
 		$sub_register->();
@@ -2330,9 +2336,9 @@ sub protocol_sip_loop {
 			warn localtime . " - Scheduling global stop in 20 seconds\n";
 			$ua->add_timer(20, $stop_cb);
 		} else {
-			if (defined $sip_register_host) {
+			if (defined $registered) {
 				warn localtime . " - Unregistering from $sip_registrar...\n";
-				$ua->register(expires => 0, cb_final => $stop_cb);
+				$ua->register(expires => 0, cb_final => $stop_cb, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()));
 				$ua->add_timer(5, $stop_cb);
 			} else {
 				$stop_cb->();
