@@ -2171,6 +2171,12 @@ sub protocol_sip_loop {
 			my $contact_addr = defined $sip_public_addr ? $sip_public_addr : laddr4dst($param->{fsms_peer_addr});
 			$contact_addr = "[$contact_addr]" if $contact_addr =~ /:/ and $contact_addr !~ /^\[.*\]$/;
 
+			my $init_timer = $call->add_timer(10, sub {
+				warn localtime . " - No final ACK was received in 10 seconds\n";
+				warn localtime . " - Hangup\n";
+				$call->bye();
+			});
+
 			my $sdp = Net::SIP::SDP->new(
 				{
 					addr => $sdp_addr,
@@ -2193,11 +2199,15 @@ sub protocol_sip_loop {
 			$param->{fsms_codec} = $codec;
 			$param->{fsms_headers} = $request->get_header();
 			$param->{fsms_headers}->{request} = [ ($request->as_parts)[1] ];
+			$param->{fsms_init_timer} = $init_timer;
 
 			return $request->create_response('200', 'OK', { contact => "$sip_proto_uri:$contact_addr:$sip_public_port" }, $sdp);
 		},
 		init_media => sub {
 			my ($call, $param) = @_;
+
+			my $init_timer = delete $param->{fsms_init_timer};
+			$init_timer->cancel();
 
 			my $codec = $param->{fsms_codec};
 			my $fmt = $param->{rtp_param}->[0];
