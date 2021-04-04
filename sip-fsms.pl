@@ -1890,15 +1890,23 @@ sub sip_split_name_addr {
 
 sub ip_addr_is_reserved {
 	my ($addr) = @_;
-	return (ip_canonical($addr) =~ /^(?:0|10|100\.(?:6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])|127|169\.254|172\.(?:1[6-9]|2[0-9]|3[0-1])|192\.0\.0|192\.0\.2|192\.31\.196|192\.52\.193|192\.88\.99|192\.168|192\.175\.48|198\.1[8-9]|198\.51\.100|203\.0\.113|22[4-9]|2[3-5][0-9])\./) ? 1 : 0;
+	return ($addr !~ /:/ and ip_canonical($addr) =~ /^(?:0|10|100\.(?:6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])|127|169\.254|172\.(?:1[6-9]|2[0-9]|3[0-1])|192\.0\.0|192\.0\.2|192\.31\.196|192\.52\.193|192\.88\.99|192\.168|192\.175\.48|198\.1[8-9]|198\.51\.100|203\.0\.113|22[4-9]|2[3-5][0-9])\./) ? 1 : 0;
 }
 
 sub ip_addr_is_invalid {
 	my ($addr) = @_;
 	return 1 unless defined $addr;
+	$addr =~ s/^\[(.*)\]$/$1/;
 	return 1 unless length $addr;
 	return 1 unless eval { $addr = ip_canonical($addr) };
 	return ($addr =~ /^(?:0|22[4-9]|2[3-5][0-9])\./) ? 1 : 0;
+}
+
+sub ip_addr_is_wildcard {
+	my ($addr) = @_;
+	$addr =~ s/^\[(.*)\]$/$1/;
+	$addr = ip_canonical($addr);
+	return ($addr =~ /^(?:0\.0\.0\.0|::)$/) ? 1 : 0;
 }
 
 sub parse_call_identity {
@@ -1973,6 +1981,7 @@ sub protocol_sip_loop {
 		Proto => $sock_proto,
 		LocalAddr => $sip_listen_addr,
 		LocalPort => $sip_listen_port,
+		V6Only => 1,
 		Reuse => 1,
 		ReuseAddr => 1,
 		($sock_proto eq 'tcp') ? (
@@ -1981,6 +1990,7 @@ sub protocol_sip_loop {
 	);
 	die "Error: Cannot create local socket: $!\n" unless defined $sock;
 	$sip_listen_addr = $sock->sockhost();
+	$sip_listen_addr = "[$sip_listen_addr]" if $sip_listen_addr =~ /:/;
 	$sip_listen_port = $sock->sockport();
 
 	my $contact_addr = defined $sip_public_addr ? $sip_public_addr : $sip_listen_addr;
@@ -2157,7 +2167,9 @@ sub protocol_sip_loop {
 			my $fmt = $fmt_peer;
 			my $ptime = ($rtp_ptime eq 'peer') ? $ptime_peer : $rtp_ptime;
 			my $sdp_addr = defined $rtp_public_addr ? $rtp_public_addr : laddr4dst($sdp_addr_peer);
+			$sdp_addr =~ s/^\[(.*)\]$/$1/;
 			my $contact_addr = defined $sip_public_addr ? $sip_public_addr : laddr4dst($param->{fsms_peer_addr});
+			$contact_addr = "[$contact_addr]" if $contact_addr =~ /:/ and $contact_addr !~ /^\[.*\]$/;
 
 			my $sdp = Net::SIP::SDP->new(
 				{
@@ -2421,7 +2433,7 @@ die "$0: Protocol for --sip-listen and --sip-register does not match\n" if defin
 my $sip_listen_addr = (length $2) ? $2 : '0.0.0.0';
 my $sip_listen_port = (defined $3) ? $3 : (defined $sip_register_host) ? undef : ($sip_proto eq 'tls') ? 5061 : 5060;
 my $sip_public_addr = (defined $4 and length $4) ? $4 : $sip_listen_addr;
-$sip_public_addr = undef if defined $sip_public_addr and ip_canonical($sip_public_addr) =~ /^(?:0\.0\.0\.0|::)$/;
+$sip_public_addr = undef if defined $sip_public_addr and ip_addr_is_wildcard($sip_public_addr);
 my $sip_public_port = (defined $5) ? $5 : $sip_listen_port;
 
 sub parse_number_option {
@@ -2465,7 +2477,7 @@ my $rtp_listen_min_port = (defined $2) ? $2 : $Net::SIP::Util::RTP_MIN_PORT;
 my $rtp_listen_max_port = (defined $3) ? $3 : $Net::SIP::Util::RTP_MAX_PORT;
 die "$0: Invalid RTP listen max port $rtp_listen_max_port\n" if $rtp_listen_max_port < $rtp_listen_min_port+1 or $rtp_listen_max_port >= 2**16;
 my $rtp_public_addr = (defined $4 and length $4) ? $4 : $rtp_listen_addr;
-$rtp_public_addr = undef if defined $rtp_public_addr and ip_canonical($rtp_public_addr) =~ /^(?:0\.0\.0\.0|::)$/;
+$rtp_public_addr = undef if defined $rtp_public_addr and ip_addr_is_wildcard($rtp_public_addr);
 my $rtp_public_port_offset = (defined $5) ? ($5-$rtp_listen_min_port) : 0;
 die "$0: Invalid RTP public min port $5\n" if $rtp_listen_max_port+$rtp_public_port_offset >= 2**16;
 
