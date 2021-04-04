@@ -2429,7 +2429,7 @@ my $frag_cache_disabled = ($1 eq 'none');
 my $frag_cache_expire_atexit = (defined $3 or $1 eq 'mem');
 
 my $sip_register = exists $options{'sip-register'} ? delete $options{'sip-register'} : '';
-die "$0: Invalid --sip-register $sip_register\n" unless $sip_register =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^:]*)(?::([0-9]+))?$/;
+die "$0: Invalid --sip-register $sip_register\n" unless $sip_register =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^:]*|\[[^\]]*\])(?::([0-9]+))?$/;
 my $sip_register_proto = $1;
 my $sip_auth_user = $2;
 my $sip_auth_pass = $3;
@@ -2446,11 +2446,14 @@ my $sip_listen = exists $options{'sip-listen'} ? delete $options{'sip-listen'} :
 die "$0: Invalid --sip-listen option $sip_listen\n" unless $sip_listen =~ /^(?:(tcp|udp|tls):)?([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?(?:\/([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?)?$/;
 my $sip_proto = (defined $1) ? $1 : (defined $sip_register_proto) ? $sip_register_proto : 'udp';
 die "$0: Protocol for --sip-listen and --sip-register does not match\n" if defined $sip_proto and defined $sip_register_proto and $sip_proto ne $sip_register_proto;
-my $sip_listen_addr = (length $2) ? $2 : '0.0.0.0';
+my $sip_listen_addr = (length $2) ? $2 : undef;
 my $sip_listen_port = (defined $3) ? $3 : (defined $sip_register_host) ? undef : ($sip_proto eq 'tls') ? 5061 : 5060;
-my $sip_public_addr = (defined $4 and length $4) ? $4 : $sip_listen_addr;
-$sip_public_addr = undef if defined $sip_public_addr and ip_addr_is_wildcard($sip_public_addr);
+my $sip_public_addr = (defined $4 and length $4) ? $4 : undef;
 my $sip_public_port = (defined $5) ? $5 : $sip_listen_port;
+$sip_listen_addr = (defined $sip_register_host and $sip_register_host =~ /:/) ? '[::]' : '0.0.0.0' if not defined $sip_listen_addr;
+die "$0: IP protocol for --sip-listen and --sip-register does not match\n" if defined $sip_register_host and (($sip_register_host =~ /:/ and $sip_listen_addr !~ /:/) or ($sip_register_host =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ and $sip_listen_addr =~ /:/));
+$sip_public_addr = $sip_listen_addr unless defined $sip_public_addr;
+$sip_public_addr = undef if defined $sip_public_addr and ip_addr_is_wildcard($sip_public_addr);
 
 sub parse_number_option {
 	my ($option, $default) = @_;
