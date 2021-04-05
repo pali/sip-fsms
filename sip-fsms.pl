@@ -2335,15 +2335,14 @@ sub protocol_sip_loop {
 		if ($stopping) {
 			warn localtime . " - Scheduling global stop in 20 seconds\n";
 			$ua->add_timer(20, $stop_cb);
-		} else {
-			if (defined $registered) {
-				warn localtime . " - Unregistering from $sip_registrar...\n";
-				$ua->register(expires => 0, cb_final => $stop_cb, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()));
-				$ua->add_timer(5, $stop_cb);
-			} else {
-				$stop_cb->();
-			}
 		}
+		if ($registered) {
+			warn localtime . " - Unregistering from $sip_registrar...\n";
+			$ua->register(expires => 0, cb_final => $stop_cb, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()));
+			$ua->add_timer(5, $stop_cb) unless $stopping;
+		}
+		$stop_cb->() unless $stopping or $registered;
+		$stopping = 1;
 	};
 	local ($SIG{INT}, $SIG{QUIT}, $SIG{TERM}) = ($sighandler, $sighandler, $sighandler);
 	warn localtime . " - Starting main loop and listening at $sip_proto:$sip_listen_addr:$sip_listen_port\n";
