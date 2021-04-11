@@ -2499,7 +2499,7 @@ $rtp_public_addr = undef if defined $rtp_public_addr and ip_addr_is_wildcard($rt
 my $rtp_public_port_offset = (defined $5) ? ($5-$rtp_listen_min_port) : 0;
 die "$0: Invalid RTP public min port $5\n" if $rtp_listen_max_port+$rtp_public_port_offset >= 2**16;
 
-my @rtp_codecs = exists $options{'rtp-codecs'} ? (split /,/, $options{'rtp-codecs'}) : qw(ulaw alaw);
+my @rtp_codecs = exists $options{'rtp-codecs'} ? (split /,/, delete $options{'rtp-codecs'}) : qw(ulaw alaw);
 die "$0: Invalid RTP codec $_\n" foreach grep { $_ !~ /^(?:ulaw|alaw)$/ } @rtp_codecs;
 my $rtp_ptime = exists $options{'rtp-ptime'} ? $options{'rtp-ptime'} : 'peer';
 die "$0: Invalid RTP ptime $rtp_ptime\n" unless $rtp_ptime =~ /^(?:[0-9]+|peer)$/;
