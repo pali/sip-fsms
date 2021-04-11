@@ -874,7 +874,7 @@ sub tpdu_decode {
 	my $rd = $is_submit ? (($first & 0b00000100) ? 1 : 0) : undef;
 	my $vpf = $is_submit ? (($first & 0b00011000) >> 3) : undef;
 	my $lp = $is_submit ? undef : (($first & 0b00001000) >> 3);
-	my $sr = ($first & 0b00010000) ? 1 : 0;
+	my $sr = ($first & 0b00100000) ? 1 : 0;
 	my $has_udh = ($first & 0b01000000) ? 1 : 0;
 	my $rp = $is_status ? undef : (($first & 0b10000000) ? 1 : 0);
 	return unless length $tpdu >= 1;
