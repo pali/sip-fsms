@@ -1272,8 +1272,8 @@ sub process_audio_sample {
 				$next_message_wait_before = 1;
 			}
 			my $error_code = (defined $payload and length $payload == 1) ? ord($payload) : undef;
-			if ($error_code == $smdll_error_types{WRONG_CHECKSUM}) {
-				warn localtime . " - Received error wrong checksum\n";
+			if (1) {
+				warn localtime . ' - Received ' . (defined $error_code ? ($error_code == $smdll_error_types{WRONG_CHECKSUM} ? 'error wrong checksum' : (sprintf 'error code 0x%02x', $error_code)) : 'unknown error') . "\n";
 				if ($state->{send_error_count}++ >= 4) {
 					warn localtime . " - Failed to retry 4 times\n";
 					warn localtime . " - Sending connection released\n";
@@ -1284,12 +1284,6 @@ sub process_audio_sample {
 					warn localtime . " - Retrying to send packet again\n";
 				}
 				@next_message = @{$current_message} unless @next_message;
-			} else {
-				warn localtime . ' - Received ' . (defined $error_code ? (sprintf 'error code 0x%02x', $error_code) : 'unknown error') . "\n";
-				warn localtime . " - Sending connection released\n";
-				@next_message = smdll_encode_rel();
-				$next_message_wait_after = 0.1;
-				$finish = 1;
 			}
 		} elsif ($type == $smdll_types{DATA}) {
 			$state->{send_error_count} = 0;
