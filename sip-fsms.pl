@@ -246,11 +246,15 @@ sub smdll_decode {
 	$state->{signal_buffer} = [] unless exists $state->{signal_buffer};
 	my $has_signal = v23_signal($state->{signal_buffer}, $sample);
 	if (not $has_signal) {
+		my $ignore_lost = $state->{ignore_lost};
+		my $had_signal = $state->{had_signal};
+		$state->{ignore_lost} = 0;
 		$state->{had_signal} = 0;
 		$state->{mark_bits} = 0;
 		$state->{had_mark_signal} = 0;
-		return $state->{had_mark_signal} ? $smdll_decode_error_types{LOST_SIGNAL} : ();
+		return ($had_signal and not $ignore_lost) ? $smdll_decode_error_types{LOST_SIGNAL} : ();
 	} elsif (not $state->{had_signal}) {
+		$state->{ignore_lost} = 0;
 		$state->{had_signal} = 1;
 		$state->{filter_buffer} = [];
 		$state->{baud_pll} = 0;
@@ -283,12 +287,14 @@ sub smdll_decode {
 	return unless defined $newbit;
 	my $has_carrier = $state->{carrier_bits} >= $v23_carrier_bits;
 	if (not $has_carrier) {
-		my $has_mark_signal = $state->{had_mark_signal};
+		my $ignore_lost = $state->{ignore_lost};
+		$state->{ignore_lost} = 0;
 		$state->{mark_bits} = 0;
 		$state->{had_mark_signal} = 0;
 		$state->{skip_mark_bits} = 0;
-		return $has_mark_signal ? $smdll_decode_error_types{LOST_CARRIER} : ();
+		return ($had_carrier and not $ignore_lost) ? $smdll_decode_error_types{LOST_CARRIER} : ();
 	} elsif (not $had_carrier) {
+		$state->{ignore_lost} = 0;
 		$state->{mark_bits} = 0;
 		$state->{had_mark_signal} = 0;
 		$state->{smdll_bits} = [];
@@ -306,6 +312,7 @@ sub smdll_decode {
 	return unless $state->{had_mark_signal};
 	if (@{$state->{smdll_bits}} == 9) {
 		if ($newbit != 1) {
+			$state->{ignore_lost} = 1;
 			$state->{mark_bits} = 0;
 			$state->{had_mark_signal} = 0;
 			$state->{smdll_buffer} = [];
@@ -315,6 +322,7 @@ sub smdll_decode {
 		$state->{smdll_bits} = [];
 	} else {
 		if (@{$state->{smdll_bits}} == 0 and $newbit != 0) {
+			$state->{ignore_lost} = 1;
 			$state->{mark_bits} = 0;
 			$state->{had_mark_signal} = 0;
 			$state->{smdll_buffer} = [];
@@ -337,6 +345,7 @@ sub smdll_decode {
 	my $status = $smdll_decode_error_types{NO_ERROR};
 	$status = $smdll_decode_error_types{WRONG_LENGTH} if $length > 176;
 	$status = $smdll_decode_error_types{WRONG_CHECKSUM} if $checksum != $exp_checksum;
+	$state->{ignore_lost} = 1;
 	$state->{mark_bits} = 0;
 	$state->{had_mark_signal} = 0;
 	$state->{skip_mark_bits} = 10;
