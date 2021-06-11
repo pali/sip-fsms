@@ -1271,7 +1271,7 @@ sub process_audio_sample {
 	return ($finish, $status) unless defined $status and not $finish;
 	my @next_message;
 	my $next_message_prepend_only = 0;
-	my $next_message_wait_before = 0.5;
+	my $next_message_wait_before = 0.2;
 	my $next_message_wait_after = 0;
 	if ($status == $smdll_decode_error_types{NO_ERROR} and defined $type) {
 		$state->{receive_error_count} = 0;
@@ -1412,7 +1412,7 @@ sub process_timeout {
 	return $finish if @{$remaining_buffer} or $finish or $timeout < 4;
 	my @next_message;
 	my $next_message_prepend_only = 0;
-	my $next_message_wait_before = @{$remaining_buffer} ? 0.5 : 0;
+	my $next_message_wait_before = @{$remaining_buffer} ? 0.2 : 0;
 	my $next_message_wait_after = 0;
 	warn localtime . " - 4 seconds timeout while waiting for response\n";
 	if ($state->{send_error_count}++ >= 4 or $state->{receive_error_count}++ >= 4) {
@@ -2244,7 +2244,7 @@ sub protocol_sip_loop {
 			});
 
 			my @current_message = smdll_encode_est();
-			my @remaining_buffer = ((0) x int(8000*1), @current_message);
+			my @remaining_buffer = ((0) x int(8000*2), @current_message);
 			warn localtime . " - Sending connection established\n";
 
 			$param->{fsms_state} = $state;
