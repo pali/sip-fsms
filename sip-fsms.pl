@@ -220,6 +220,7 @@ sub smdll_encode {
 	my @samples;
 	my $phase = 0;
 	my $baud_pll = 0;
+	push @samples, v23_encode($phase, $baud_pll, 0);
 	push @samples, v23_encode($phase, $baud_pll, 1) for 1..$smpl_mark_signal_bits;
 	push @samples, smpl_encode($phase, $baud_pll, $type);
 	push @samples, smpl_encode($phase, $baud_pll, scalar @payload);
