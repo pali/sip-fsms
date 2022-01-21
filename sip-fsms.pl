@@ -503,6 +503,13 @@ sub tpdu_decode_address {
 		$septets_len = $address_len-2 if $septets_len > $address_len-2;
 		$number_value = tpdu_decode_7bit($address_value, $septets_len);
 		$number_type = 0b101;
+	} elsif ($number_type == 0b000 and $number_plan == 0b1001) {
+		# Special undocumented Alphabet encoding for F-SMS TPDU address used in Czech Republic:
+		# Characters are encoded as semioctets indexed from one: A=1, B=2, ... N=14, O=15, P=0.
+		# And then it overflows and continues again from one: Q=1, R=2, S=3, ... Y=9, Z=10.
+		# Because decoding of 1..10 is ambiguous, decode all semioctets as A-P characters only.
+		$number_value = substr(join('', map { chr(ord("A") + ($_ + 16 - 1) % 16) } map { (ord($_) & 0b1111), (ord($_) >> 4) } split //, $address_value), 0, $number_len);
+		$number_type = 0b101;
 	} else {
 		$number_value = substr(join('', map { tpdu_decode_semioctet($_) } split //, $address_value), 0, $number_len);
 	}
