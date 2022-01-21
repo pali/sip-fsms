@@ -487,15 +487,19 @@ sub tpdu_decode_address {
 	return unless $address_len <= 12;
 	return unless length $address >= $address_len;
 	my $address_value = substr $address, 2, $address_len-2;
+	my $first = ord(substr $address_value, 0, 1);
+	$first = (($first & 0b00001111) << 4) | (($first & 0b11110000) >> 4);
 	my $number_value;
 	if ($number_type == 0b101) {
 		$number_value = tpdu_decode_7bit($address_value, $address_len-2);
-	} elsif ($number_type == 0b000 and $number_plan == 0b1001) {
+	} elsif ($number_type == 0b000 and $number_plan == 0b1001 and ($first & 0b11100000) == 0b00000000 and ($first & 0b00011111) == $number_len-2) {
 		# Special undocumented GSM 7bit encoding for F-SMS TPDU address used in Czech Republic:
-		# Bytes are encoded as half-octets, first encoded byte represents number of GSM 7bit septets
-		# and the rest encoded bytes contain GSM 7bit septets packed as bytes
+		# Bytes are encoded as semioctets, first encoded byte has upper 3 bits unset,
+		# lower 5 bits of first byte represents number of following semioctets
+		# and the rest encoded bytes contain GSM 7bit septets packed as bytes.
 		$address_value = join '', map { chr(((ord($_) & 0b00001111) << 4) | ((ord($_) & 0b11110000) >> 4)) } split //, $address_value;
-		my $septets_len = ord(substr $address_value, 0, 1, '');
+		# one semioctet is 4 bits long, one septet is 7 bits long
+		my $septets_len = int(ord(substr $address_value, 0, 1, '') * 4 / 7);
 		$septets_len = $address_len-2 if $septets_len > $address_len-2;
 		$number_value = tpdu_decode_7bit($address_value, $septets_len);
 		$number_type = 0b101;
