@@ -289,7 +289,7 @@ sub smdll_decode {
 	my $has_carrier = $state->{carrier_bits} >= $v23_carrier_bits;
 	if (not $has_carrier) {
 		my $ignore_lost = $state->{ignore_lost};
-		$state->{ignore_lost} = 0;
+		$state->{ignore_lost} = 1;
 		$state->{mark_bits} = 0;
 		$state->{had_mark_signal} = 0;
 		$state->{skip_mark_bits} = 0;
