@@ -405,7 +405,7 @@ sub smtl_decode_data {
 
 sub smtl_encode_data {
 	my ($tpdu) = @_;
-	my @payloads = defined $tpdu ? unpack('(A176)*', $tpdu) : ();
+	my @payloads = defined $tpdu ? unpack('(a176)*', $tpdu) : ();
 	my $last_payload = pop @payloads;
 	my @samples;
 	push @samples, [ smdll_encode(0, $smdll_types{DATA}, $_) ] foreach @payloads;
@@ -466,13 +466,13 @@ sub tpdu_encode_semioctet {
 }
 
 sub tpdu_decode_7bit {
-	return encode('UTF-8', decode('GSM0338', substr(pack('(b*)*', unpack '(A7)*', unpack 'b*', $_[0]), 0, $_[1])));
+	return encode('UTF-8', decode('GSM0338', substr(pack('(b*)*', unpack '(a7)*', unpack 'b*', $_[0]), 0, $_[1])));
 }
 
 sub tpdu_encode_7bit {
 	my $bytes = encode('GSM0338', decode('UTF-8', $_[0]));
 	my $len = length $bytes;
-	my $septets = pack 'b*', join '', map { substr $_, 0, 7 } unpack '(A8)*', unpack 'b*', $bytes;
+	my $septets = pack 'b*', join '', map { substr $_, 0, 7 } unpack '(a8)*', unpack 'b*', $bytes;
 	return ($septets, $len);
 }
 
@@ -532,7 +532,7 @@ sub tpdu_encode_address {
 		$address .= $sep;
 	} else {
 		die "TPDU number type $type cannot contain non-numeric characters\n" unless $number =~ /^[0-9*#a-cA-C]*$/;
-		$address .= tpdu_encode_semioctet($_) foreach unpack '(A2)*', $number;
+		$address .= tpdu_encode_semioctet($_) foreach unpack '(a2)*', $number;
 	}
 	die "TPDU number is too long\n" unless length $address <= 12;
 	return $address;
@@ -609,7 +609,7 @@ sub tpdu_encode_ts {
 	push @ts, int(($hours*60 + $minutes)/15);
 	die "TPDU timestamp timezone is invalid\n" unless $ts[6] <= 79;
 	my $ts = '';
-	$ts .= tpdu_encode_semioctet($_) foreach unpack '(A2)*', join '', map { sprintf '%02u', $_ } @ts;
+	$ts .= tpdu_encode_semioctet($_) foreach unpack '(a2)*', join '', map { sprintf '%02u', $_ } @ts;
 	substr $ts, 6, 1, chr(ord(substr $ts, 6, 1) | 0b00001000) if $sign eq '-';
 	return $ts;
 }
@@ -1161,7 +1161,7 @@ sub rpdu_encode_address {
 	die "RPDU number plan $plan is not in range 0b0000 ... 0b1111\n" if $plan < 0 or $plan > 0b1111;
 	my $address = '';
 	$address .= chr(0b10000000 | ($type << 4) | $plan);
-	$address .= tpdu_encode_semioctet($_) foreach unpack '(A2)*', $number;
+	$address .= tpdu_encode_semioctet($_) foreach unpack '(a2)*', $number;
 	die "RPDU number is too long\n" unless length $address <= 11;
 	$address = chr(length $address) . $address;
 	return $address;
