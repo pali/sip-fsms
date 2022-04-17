@@ -1823,7 +1823,7 @@ sub process_frag_message {
 		warn localtime . " - Storing RPDU data to file ${store_to_dir}/sms_${date}_${number}${part}${dupstr}.sms\n";
 		open my $fh, '>:raw', "${store_to_dir}/sms_${date}_${number}${part}${dupstr}.sms";
 		if (not $fh) {
-			warn localtime . " - ERROR: Cannot open file: $!\n";
+			warn localtime . " - ERROR: Cannot create file: $!\n";
 		} else {
 			print $fh rpdu_encode(((defined $mti and $mti == 1) ? (0, 0, number_for_rpdu($smte), number_for_rpdu($smsc)) : (1, 0, number_for_rpdu($smsc), number_for_rpdu($smte))), $tpdu);
 			close $fh;
