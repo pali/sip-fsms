@@ -1814,8 +1814,14 @@ sub process_frag_message {
 		my $number = format_number($num, $country);
 		$number =~ s/[\s"\/<>[:^print:]]/_/g;
 		my $part = (defined $frag) ? ('_part' . $frag->[4]) : '';
-		warn localtime . " - Storing RPDU data to file ${store_to_dir}/sms_${date}_${number}${part}.sms\n";
-		open my $fh, '>:raw', "${store_to_dir}/sms_${date}_${number}${part}.sms";
+		my $dup = 0;
+		my $dupstr = '';
+		while (-e "${store_to_dir}/sms_${date}_${number}${part}${dupstr}.sms") {
+			$dup++;
+			$dupstr = "_dup$dup";
+		}
+		warn localtime . " - Storing RPDU data to file ${store_to_dir}/sms_${date}_${number}${part}${dupstr}.sms\n";
+		open my $fh, '>:raw', "${store_to_dir}/sms_${date}_${number}${part}${dupstr}.sms";
 		if (not $fh) {
 			warn localtime . " - ERROR: Cannot open file: $!\n";
 		} else {
