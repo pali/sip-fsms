@@ -2172,7 +2172,7 @@ sub protocol_sip_loop {
 			}
 
 			if (not defined $codec) {
-				warn localtime . " - No supported codec\n";
+				warn localtime . " - Error: No common supported RTP codec\n";
 				$call->cleanup();
 				return $request->create_response('488', 'Not Acceptable Here');
 			}
