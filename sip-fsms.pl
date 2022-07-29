@@ -2750,6 +2750,15 @@ EOD
 
 my %options;
 my %multi_options = map { $_ => [] } qw(input);
+
+foreach (keys %ENV) {
+	next unless /SIP_FSMS_(.*)/;
+	my $k = $1;
+	$k =~ y/A-Z/a-z/;
+	$k =~ s/_/-/g;
+	$options{$k} = $ENV{$_};
+}
+
 foreach (@ARGV) {
 	die "$0: Invalid argument $_\n" unless $_ =~ /^--([^=]+)=(.*)$/;
 	if (exists $multi_options{$1}) {
