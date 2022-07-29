@@ -1282,6 +1282,31 @@ sub decode_audio_sample {
 
 #####
 
+sub prepare_data_messages_send_mode {
+	my ($state, $finish, $tpdu) = @_;
+	my @next_message;
+	my $next_message_wait_after = 0;
+	delete $state->{send_data_messages};
+	my @data_messages = (defined $tpdu) ? smtl_encode_data($tpdu) : ();
+	if (@data_messages) {
+		my $next_message = shift @data_messages;
+		@next_message = @{$next_message};
+		$state->{send_data_messages} = [ @data_messages ] if @data_messages;
+		if (@data_messages) {
+			warn localtime . " - Sending part of extended SM-DLL data\n";
+		} else {
+			warn localtime . " - Sending TPDU data\n";
+		}
+	} else {
+		warn localtime . " - No more messages to send\n";
+		warn localtime . " - Sending connection released\n";
+		@next_message = smdll_encode_rel();
+		$next_message_wait_after = 0.1;
+		$finish = 1;
+	}
+	return ($finish, $next_message_wait_after, @next_message);
+}
+
 sub process_audio_sample {
 	my ($state, $mode, $role, $tpdu_callback, $current_message, $remaining_buffer, $finish, $sample) = @_;
 	my ($status, $type, $payload, @tpdu_data) = decode_audio_sample($state, $sample);
@@ -1298,7 +1323,11 @@ sub process_audio_sample {
 				$next_message_wait_before = 1;
 			}
 			my $error_code = (defined $payload and length $payload == 1) ? ord($payload) : undef;
-			if (1) {
+			if ($mode eq 'send' and defined $error_code and $error_code == $smdll_error_types{UNSUPP_EXT} and exists $state->{send_data_messages} and @{$state->{send_data_messages}}) {
+				warn localtime . " - Received error extension mechanism not supported\n";
+				my $tpdu = $tpdu_callback->(1, $smdll_types{ERROR});
+				($finish, $next_message_wait_after, @next_message) = prepare_data_messages_send_mode($state, $finish, $tpdu);
+			} elsif ($mode eq 'receive' or (defined $error_code and $error_code == $smdll_error_types{WRONG_CHECKSUM})) {
 				warn localtime . ' - Received ' . (defined $error_code ? ($error_code == $smdll_error_types{WRONG_CHECKSUM} ? 'error wrong checksum' : (sprintf 'error code 0x%02x', $error_code)) : 'unknown error') . "\n";
 				if ($state->{send_error_count}++ >= 4) {
 					warn localtime . " - Failed to retry 4 times\n";
@@ -1310,8 +1339,14 @@ sub process_audio_sample {
 					warn localtime . " - Retrying to send packet again\n";
 				}
 				@next_message = @{$current_message} unless @next_message;
+			} else {
+				warn localtime . ' - Received ' . (defined $error_code ? (sprintf 'error code 0x%02x', $error_code) : 'unknown error') . "\n";
+				warn localtime . " - Sending connection released\n";
+				@next_message = smdll_encode_rel();
+				$next_message_wait_after = 0.1;
+				$finish = 1;
 			}
-		} elsif ($type == $smdll_types{DATA}) {
+		} elsif ($mode eq 'receive' and $type == $smdll_types{DATA}) {
 			$state->{send_error_count} = 0;
 			if (not defined $payload) {
 				warn localtime . " - Received part of extended SM-DLL data\n";
@@ -1385,6 +1420,39 @@ sub process_audio_sample {
 					}
 				}
 			}
+		} elsif ($mode eq 'send' and ($type == $smdll_types{ACK} or $type == $smdll_types{NACK})) {
+			$state->{send_error_count} = 0;
+			my $no_error = not @{$remaining_buffer}; # no_error if message was fully send
+			if (not defined $payload and exists $state->{send_data_messages} and @{$state->{send_data_messages}}) {
+				if ($type == $smdll_types{NACK}) {
+					warn localtime . " - Received negative acknowledge for part of extended SM-DLL data\n";
+					my $tpdu = $tpdu_callback->($no_error, $smdll_types{ERROR});
+					($finish, $next_message_wait_after, @next_message) = prepare_data_messages_send_mode($state, $finish, $tpdu);
+				} else {
+					warn localtime . " - Received acknowledge for part of extended SM-DLL data\n";
+					my $next_message = shift @{$state->{send_data_messages}};
+					@next_message = @{$next_message};
+					if (@{$state->{send_data_messages}}) {
+						warn localtime . " - Sending part of extended SM-DLL data\n";
+					} else {
+						warn localtime . " - Sending TPDU data\n";
+						delete $state->{send_data_messages};
+					}
+				}
+			} else {
+				if ($type == $smdll_types{NACK}) {
+					warn localtime . " - Received negative acknowledge\n";
+				} else {
+					warn localtime . " - Received acknowledge\n";
+				}
+				my $tpdu = $tpdu_callback->($no_error, $type, $payload, @tpdu_data);
+				($finish, $next_message_wait_after, @next_message) = prepare_data_messages_send_mode($state, $finish, $tpdu);
+			}
+		} elsif ($mode eq 'send' and $type == $smdll_types{EST}) {
+			warn localtime . " - Received connection established\n";
+			$state->{send_error_count} = 0;
+			my $tpdu = $tpdu_callback->(1, undef);
+			($finish, $next_message_wait_after, @next_message) = prepare_data_messages_send_mode($state, $finish, $tpdu);
 		} elsif ($type == $smdll_types{REL}) {
 			warn localtime . " - Received connection released\n";
 			$state->{send_error_count} = 0;
@@ -1439,7 +1507,7 @@ sub process_timeout {
 		$next_message_wait_after = 0.1;
 		@{$remaining_buffer} = ();
 		$finish = 1;
-	} elsif (not $established) {
+	} elsif (not $established and $mode eq 'receive') {
 		warn localtime . " - Sending connection established\n";
 		@next_message = smdll_encode_est();
 	} else {
