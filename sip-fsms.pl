@@ -2046,24 +2046,39 @@ sub protocol_sip_loop {
 	my $mode = $options{mode};
 	my $role = $options{role};
 	my $country = $options{country};
+
+	my @tpdus = ($mode eq 'send') ? @{$options{tpdus}} : ();
+
 	my $frag_cache_file = $options{frag_cache_file};
 	my $frag_cache_expire = $options{frag_cache_expire};
 	my $local_sc_number = $options{local_sc_number};
 	my $local_te_number = $options{local_te_number};
 	my $remote_sc_number = $options{remote_sc_number};
 	my $remote_te_number = $options{remote_te_number};
+
+	my $sip_from = $options{sip_from};
+	my $sip_to = $options{sip_to};
+
 	my $sip_identity = $options{sip_identity};
 	my $sip_accept_uri_re = $options{sip_accept_uri_re};
+
 	my $sip_proto = $options{sip_proto};
+
 	my $sip_auth_user = $options{sip_auth_user};
 	my $sip_auth_pass = $options{sip_auth_pass};
+
+	my $sip_peer_host = $options{sip_peer_host};
+	my $sip_peer_port = $options{sip_peer_port};
+
 	my $sip_register_host = $options{sip_register_host};
 	my $sip_register_port = $options{sip_register_port};
-	my @sip_register_timeout = @{$options{sip_register_timeout}};
+	my @sip_register_timeout = ($mode eq 'receive') ? @{$options{sip_register_timeout}} : ();
+
 	my $sip_listen_addr = $options{sip_listen_addr};
 	my $sip_listen_port = $options{sip_listen_port};
 	my $sip_public_addr = $options{sip_public_addr};
 	my $sip_public_port = $options{sip_public_port};
+
 	my $rtp_listen_addr = $options{rtp_listen_addr};
 	my $rtp_listen_min_port = $options{rtp_listen_min_port};
 	my $rtp_listen_max_port = $options{rtp_listen_max_port};
@@ -2072,8 +2087,14 @@ sub protocol_sip_loop {
 	my @rtp_codecs = @{$options{rtp_codecs}};
 	my $rtp_ptime = $options{rtp_ptime};
 
+	$sip_identity = $sip_from unless defined $sip_identity;
+
 	my $sock_proto = ($sip_proto eq 'tls') ? 'tcp' : $sip_proto;
 	my $sip_proto_uri = ($sip_proto eq 'tls') ? 'sips' : 'sip';
+
+	my $sip_peer_laddr = defined $sip_peer_host ? laddr4dst($sip_peer_host) : undef;
+	$sip_peer_laddr = "[$sip_peer_laddr]" if defined $sip_peer_laddr and $sip_peer_laddr =~ /:/;
+	$sip_listen_addr = $sip_peer_laddr if not defined $sip_listen_addr and defined $sip_peer_laddr;
 
 	my $sock = INETSOCK(
 		Proto => $sock_proto,
@@ -2084,6 +2105,9 @@ sub protocol_sip_loop {
 		ReuseAddr => 1,
 		($sock_proto eq 'tcp') ? (
 			Listen => 100,
+		) : ($mode eq 'send') ? (
+			PeerAddr => $sip_peer_host,
+			PeerPort => $sip_peer_port,
 		) : (),
 	);
 	die "Error: Cannot create local socket: $!\n" unless defined $sock;
@@ -2091,15 +2115,16 @@ sub protocol_sip_loop {
 	$sip_listen_addr = "[$sip_listen_addr]" if $sip_listen_addr =~ /:/;
 	$sip_listen_port = $sock->sockport();
 
-	my $contact_addr = defined $sip_public_addr ? $sip_public_addr : $sip_listen_addr;
+	my $contact_addr = defined $sip_public_addr ? $sip_public_addr : (defined $sip_peer_laddr and ip_addr_is_wildcard($sip_listen_addr)) ? $sip_peer_laddr : $sip_listen_addr;
 	my $contact_port = $sip_public_port ? $sip_public_port : $sip_listen_port;
 
-	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, contact => "$sip_proto_uri:$contact_addr:$contact_port");
+	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, (defined $sip_peer_host) ? (dst => "$sip_peer_host:$sip_peer_port") : (), contact => "$sip_proto_uri:$contact_addr:$contact_port");
 	die "Error: Cannot create leg at $sip_proto:$sip_listen_addr:$sip_listen_port: $!\n" unless defined $leg;
 
 	my $sip_registrar = defined $sip_register_host ? $sip_register_host . ($sip_register_port ? ":$sip_register_port" : '') : undef;
+	my $sip_outgoing_proxy = defined $sip_peer_host ? "$sip_proto_uri:$sip_peer_host:$sip_peer_port" : undef;
 	my $sip_auth = defined $sip_auth_user ? [ $sip_auth_user, $sip_auth_pass ] : undef;
-	my $ua = Net::SIP::Simple->new(from => $sip_identity, registrar => $sip_registrar, auth => $sip_auth, legs => [ $leg ]);
+	my $ua = Net::SIP::Simple->new(from => $sip_identity, outgoing_proxy => $sip_outgoing_proxy, registrar => $sip_registrar, auth => $sip_auth, legs => [ $leg ]);
 	die "Error: Cannot create user agent for $sip_identity: $!\n" unless defined $ua;
 
 	my $stop;
@@ -2169,9 +2194,99 @@ sub protocol_sip_loop {
 		}
 	}
 
-	$ua->add_timer(30*60, sub { process_frag_cache($frag_cache_expire, $country) }, 30*60, 'process_frag_cache') if $frag_cache_expire;
+	my %send_callbacks = (
+		cb_preliminary => sub {
+			my ($call, $code, $response) = @_;
+			warn localtime . " - Received $code " . $response->msg() . "\n";
+		},
+		cb_final => sub {
+			my ($status, $call, %info) = @_;
+			my $error = $call->error();
+			my $packet = exists $info{packet} ? $info{packet} : undef;
 
-	$ua->listen(
+			if (not defined $error and $status eq 'OK') {
+				my $code = defined $packet ? $packet->code() : '';
+				my $msg = defined $packet ? $packet->msg() : $status;
+				warn localtime . " - Received $code $msg\n";
+			} elsif (exists $info{code} and defined $info{code}) {
+				my $msg = defined $packet ? $packet->msg() : '';
+				warn localtime . " - Received error $info{code} $msg\n";
+				$stop = 1;
+				return;
+			} elsif (exists $info{errno} and defined $info{errno} and $info{errno} =~ /^[1-9][0-9]*$/) {
+				$! = int($info{errno});
+				warn localtime . " - Error: $!\n";
+				$stop = 1;
+				return;
+			} else {
+				warn localtime . " - Error: $error\n";
+				$stop = 1;
+				return;
+			}
+
+			my $param = $call->{param};
+			my ($codec, $sdp_addr, $fmt, $ptime);
+			my $sdp_peer = $param->{sdp_peer};
+			if ($sdp_peer) {
+				my @media_peer = $sdp_peer->get_media();
+				foreach my $i (0..$#media_peer) {
+					my $m = $media_peer[$i];
+					$sdp_addr = $m->{addr};
+					next unless $m->{proto} eq 'RTP/AVP';
+					next unless $m->{media} eq 'audio';
+					my $fmts_peer = $m->{fmt};
+					next unless $fmts_peer;
+					my $ulaw_fmt_peer = $sdp_peer->name2int('PCMU/8000', $i) || 0;
+					my $alaw_fmt_peer = $sdp_peer->name2int('PCMA/8000', $i) || 8;
+					($ptime) = map { ($_->[0] eq 'a' and $_->[1] =~ /^ptime:\s*([0-9]+)/) ? $1 : () } @{$m->{lines}};
+					foreach (@{$fmts_peer}) {
+						if ($_ == $ulaw_fmt_peer and grep { $_ eq 'ulaw' } @rtp_codecs) {
+							$codec = 'ulaw';
+							$fmt = $ulaw_fmt_peer;
+							$ptime = 20 unless $ptime;
+							last;
+						} elsif ($_ == $alaw_fmt_peer and grep { $_ eq 'alaw' } @rtp_codecs) {
+							$codec = 'alaw';
+							$fmt = $alaw_fmt_peer;
+							$ptime = 20 unless $ptime;
+							last;
+						}
+					}
+					last if defined $fmt;
+				}
+			}
+			if (not defined $codec) {
+				warn localtime . " - No supported codec\n";
+				$call->bye();
+				return;
+			}
+			if (ip_addr_is_invalid($sdp_addr) or (ip_addr_is_reserved($sip_peer_host) != ip_addr_is_reserved($sdp_addr) and ip_canonical($sip_peer_host) ne ip_canonical($sdp_addr))) {
+				warn localtime . " - Peer is behind NAT and has not announced correct address in SDP, ignoring address from SDP\n";
+				my @media_peer = $sdp_peer->get_media();
+				my $raddr = $param->{media_raddr};
+				foreach my $i (0..$#$raddr) {
+					if (not defined $raddr->[$i]) {
+						if ($media_peer[$i]->{addr} eq $sdp_addr) {
+							my $range = $media_peer[$i]->{range} || 1;
+							my @socks = map { ip_parts2sockaddr($sip_peer_host, $media_peer[$i]->{port} + $_) } (0..$range-1);
+							$raddr->[$i] = @socks == 1 ? $socks[0] : \@socks;
+						}
+					} else {
+						foreach (ref $raddr->[$i] ? @{$raddr->[$i]} : $raddr->[$i]) {
+							my ($addr, $port, $fam) = ip_sockaddr2parts($_);
+							$_ = ip_parts2sockaddr($sip_peer_host, $port, $fam) if $addr eq ip_canonical($sdp_addr);
+						}
+					}
+				}
+			}
+			$param->{rtp_param} = [ $fmt, int(8000*$ptime/1000), $ptime/1000 ];
+			$param->{fsms_codec} = $codec;
+
+			warn localtime . " - Call established\n";
+		},
+	);
+
+	my %receive_callbacks = (
 		filter => sub {
 			my ($from, $request) = @_;
 			return 0 if $stopping;
@@ -2316,11 +2431,14 @@ sub protocol_sip_loop {
 
 			return $request->create_response('200', 'OK', { contact => "$sip_proto_uri:$contact_addr:$contact_port" }, $sdp);
 		},
+	);
+
+	my %common_callbacks = (
 		init_media => sub {
 			my ($call, $param) = @_;
 
 			my $init_timer = delete $param->{fsms_init_timer};
-			$init_timer->cancel();
+			$init_timer->cancel() if $init_timer;
 
 			my $codec = $param->{fsms_codec};
 			my $fmt = $param->{rtp_param}->[0];
@@ -2335,7 +2453,7 @@ sub protocol_sip_loop {
 				my $state = delete $param->{fsms_state};
 				my $timer = delete $param->{fsms_timer};
 				process_audio_finish($state) if defined $state;
-				store_frag_cache($frag_cache_file) if defined $frag_cache_file;
+				store_frag_cache($frag_cache_file) if $mode eq 'receive' and defined $frag_cache_file;
 				$timer->cancel() if defined $timer;
 				$stop_send_receive = 1;
 			};
@@ -2347,15 +2465,20 @@ sub protocol_sip_loop {
 				$call->bye();
 			});
 
-			my @current_message = smdll_encode_est();
-			my @remaining_buffer = ((0) x int(8000*2), @current_message);
-			warn localtime . " - Sending connection established\n";
+			my @current_message;
+			my @remaining_buffer;
+
+			if ($mode eq 'receive') {
+				@current_message = smdll_encode_est();
+				@remaining_buffer = ((0) x int(8000*2), @current_message);
+				warn localtime . " - Sending connection established\n";
+			}
 
 			$param->{fsms_state} = $state;
 			$param->{fsms_timer} = $timer;
 			$param->{fsms_cleanup} = $cleanup;
 
-			my $tpdu_callback = sub {
+			my $tpdu_callback = ($mode eq 'receive') ? sub {
 				my ($no_erorr, $type, $payload, @tpdu_data) = @_;
 				my $mti = $tpdu_data[1] || 0;
 				my $dir = ($role eq 'te') ? 0 : ($role eq 'sc') ? 1 : ($mti == 1) ? 1 : 0;
@@ -2364,6 +2487,19 @@ sub protocol_sip_loop {
 				# TODO: process Status Report with $mti == 2
 				process_frag_message($smte, $smsc, $country, $payload, @tpdu_data);
 				return;
+			} : sub {
+				my ($no_erorr, $type, $payload, @tpdu_data) = @_;
+				if (not defined $type) {
+					return @tpdus ? $tpdus[0] : undef;
+				} elsif ($type == $smdll_types{ACK}) {
+					# TODO: message successfully sent, store it to disk
+					shift @tpdus;
+					return @tpdus ? $tpdus[0] : undef;
+				} else {
+					# TODO: message failed
+					shift @tpdus;
+					return @tpdus ? $tpdus[0] : undef;
+				}
 			};
 
 			my $timeout_packets = 0;
@@ -2412,6 +2548,10 @@ sub protocol_sip_loop {
 			my ($param) = @_;
 			warn localtime . " - Other side hangup\n";
 			$param->{fsms_cleanup}->() if exists $param->{fsms_cleanup};
+			if ($mode eq 'send') {
+				# wait two seconds and reply to additional retransmission of bye packet
+				$ua->add_timer(2, sub { warn localtime . " - Call ended\n"; $stop = 1; });
+			}
 		},
 		send_bye => sub {
 			my ($param) = @_;
@@ -2422,17 +2562,58 @@ sub protocol_sip_loop {
 			my $param = $call->{param};
 			my $cleanup = delete $param->{fsms_cleanup};
 			$cleanup->() if defined $cleanup;
-			my $refaddr = refaddr($call);
-			delete $calls{$refaddr};
-			if ($stopping and not grep { defined $_ } values %calls) {
-				warn localtime . " - All calls ended\n";
+			if ($mode eq 'receive') {
+				my $refaddr = refaddr($call);
+				delete $calls{$refaddr};
+				if ($stopping and not grep { defined $_ } values %calls) {
+					warn localtime . " - All calls ended\n";
+					$stop_cb->();
+				}
+			} else {
 				$stop_cb->();
 			}
 		},
 	);
 
+	my $call;
+
+	if ($mode eq 'receive') {
+		$ua->add_timer(30*60, sub { process_frag_cache($frag_cache_expire, $country) }, 30*60, 'process_frag_cache') if $frag_cache_expire;
+		warn localtime . " - Listening at $sip_proto:$sip_listen_addr:$sip_listen_port\n";
+		$ua->listen(%receive_callbacks, %common_callbacks);
+	} else {
+		$rtp_listen_addr = ($sock->sockhost() !~ /^(?:0\.0\.0\.0|::)$/) ? $sock->sockhost() : laddr4dst($sip_peer_host) unless defined $rtp_listen_addr;
+		my ($rtp_port, $rtp_sock, $rtcp_sock) = create_rtp_sockets($rtp_listen_addr, 2, $rtp_listen_min_port, $rtp_listen_max_port);
+		die "Error: Cannot create rtp socket at $rtp_listen_addr: $!\n" unless defined $rtp_sock;
+		die "Error: Cannot create rtcp socket at $rtp_listen_addr: $!\n" unless defined $rtcp_sock;
+
+		my $sdp_addr = defined $rtp_public_addr ? $rtp_public_addr : $rtp_listen_addr;
+		my @rtp_map = map { ($_ eq 'ulaw') ? [ 0, 'PCMU/8000' ] : ($_ eq 'alaw') ? [ 8, 'PCMA/8000' ] : () } @rtp_codecs;
+
+		my $sdp = eval { Net::SIP::SDP->new(
+			{
+				addr => $sdp_addr,
+			},
+			{
+				media => 'audio',
+				proto => 'RTP/AVP',
+				port => $rtp_port+$rtp_public_port_offset,
+				range => 2,
+				fmt => [ map { $_->[0] } @rtp_map ],
+				a => [
+					(map { "rtpmap:$_->[0] $_->[1]" } @rtp_map),
+					"ptime:$rtp_ptime",
+				],
+			},
+		) };
+		die "Error: Cannot create SDP object: $@\n" unless defined $sdp;
+
+		warn localtime . " - Sending invite to $sip_to via $sip_proto:$sip_peer_host:$sip_peer_port\n";
+		$call = $ua->invite($sip_to, media_lsocks => [ [ $rtp_sock, $rtcp_sock ] ], sdp => $sdp, %send_callbacks, %common_callbacks);
+	}
+
 	my %defaultsig = ( INT => $SIG{INT}, QUIT => $SIG{QUIT}, TERM => $SIG{TERM} );
-	my $sighandler = sub {
+	my $sighandler = ($mode eq 'receive') ? sub {
 		$SIG{$_} = $defaultsig{$_} foreach keys %defaultsig;
 		warn localtime . " - Exit signal, not accepting new calls and scheduling call hangups...\n";
 		foreach my $call (grep { defined $_ } values %calls) {
@@ -2450,9 +2631,13 @@ sub protocol_sip_loop {
 		}
 		$stop_cb->() unless $stopping or $registered;
 		$stopping = 1;
+	} : sub {
+		$SIG{$_} = $defaultsig{$_} foreach keys %defaultsig;
+		warn localtime . " - Exit signal, not sending remaining messages and scheduling call hangup...\n";
+		# TODO
 	};
 	local ($SIG{INT}, $SIG{QUIT}, $SIG{TERM}) = ($sighandler, $sighandler, $sighandler);
-	warn localtime . " - Starting main loop and listening at $sip_proto:$sip_listen_addr:$sip_listen_port\n";
+	warn localtime . " - Starting main loop\n";
 	$ua->loop(undef, \$stop);
 	$ua->cleanup();
 	warn localtime . " - Stopped\n";
@@ -2463,9 +2648,20 @@ if (grep { $_ eq '--help' } @ARGV) {
 	print <<"EOD";
 Usage: $0 [ options ]
 
-SIP F-SMS receiver. Listen for incoming SIP calls,
-receive V.23 modulated F-SMS messages and store
-them either on disk or send via email.
+SIP F-SMS application.
+
+In receive mode - listen for incoming SIP audio
+calls, receive V.23 modulated F-SMS messages,
+decode them to TPDU and store them either on disk
+in RPDU format or send them via email in plain
+text + RPDU format.
+
+In send mode - generate TPDU messages, encode
+them to F-SMS via V.23 modulation and send via
+SIP audio call to remote side.
+
+Both roles are supported, application can act
+either as Terminal Equipment or as Service Center.
 
 Options:
   --help                   Show this help
@@ -2473,23 +2669,45 @@ Options:
   --mode=receive           Application mode: receive (default receive)
   --role=te|sc|dual        Process role: te - Terminal Equipment, sc - Service Center, dual - Dual role based on incoming data (default dual)
   --country=code           Country code for telephone numbers normalization (default none - no normalization)
+
+Receive options:
   --frag-cache=loc,expire  Parts of fragmented messages can be stored either persistant disk file or only in process memory (string "mem") or disabled (string "none"). Incomplete parts expire after specified time (in minutes) and/or at process exit (string "atexit"). Default "mem,1440,atexit"
+  --store-to-dir=dir       Specify disk directory where to store received messages in RPDU format (application/vnd.3gpp.sms)
+  --send-email=to,from     Specify envelope to recipient and optional from address (default from address is current user)
+
+SIP receive options:
   --local-number=list      List of SIP headers from which is retrieved local receiver telephone number, syntax: header:name|user|tel|/regex/ OR fixed-number OR none (default diversion:tel,diversion:user,to:tel,to:user,request:tel,request:user)
   --remote-number=list     List of SIP headers from which is retrieved remote caller telephone number (default p-asserted-identity:tel,p-asserted-identity:user,p-preferred-identity:tel,p-preferred-identity:user,from:tel,from:user)
   --local-te-number=list   --local-number for te when receiver is in te role (default --local-number)
   --remote-sc-number=list  --remote-number for sc when receiver is in te role (default --remote-number)
   --local-sc-number=list   --local-number for sc when receiver is in sc role (default --local-number)
   --remote-te-number=list  --remote-number for te when receiver is in sc role (default --remtoe-number)
+
   --sip-identity=identity  SIP identity (default "F-SMS <sip:fsms\@localhost>")
   --sip-accept-uri=regex   Perl regex with SIP URIs for incoming calls (default ^.*\$)
   --sip-register=format    format: proto:user:pass\@host:port (default without registration)
   --sip-register-timeout=f format: expires,init,retry  expires - register expiration (0 - server default), init - initial register attemps, retry - timeout after failed registration (default expires=0 init=1 retry=30)
+
   --sip-listen=format      format: proto:listen_addr:listen_port/public_addr:public_port (default proto=udp listen_addr=0.0.0.0 listen_port=default_for_proto public_addr=listen_addr public_port=listen_port)
-  --rtp-listen=format      format: listen_addr:listen_min_port-listen_max_port/public_addr:public_min_port (default address is sip-listen with whole port range)
+  --rtp-listen=format      format: listen_addr:listen_min_port-listen_max_port/public_addr:public_min_port (default address is sip-listen with default Net::SIP RTP port range)
   --rtp-codecs=codecs      List of allowed codecs separated by comma, chosen codec is by peer preference (default ulaw,alaw)
-  --rtp-ptime=ptime        Request receiving RTP packet length in milliseconds (default same length as peer requested from us)
-  --store-to-dir=dir       Specify disk directory where to store received messages in RPDU format (application/vnd.3gpp.sms)
-  --send-email=to,from     Specify envelope to recipient and optional from address (default from address is current user)
+  --rtp-ptime=ptime        Request receiving and sending RTP packet length in milliseconds (default same length as peer requested from us)
+
+SIP send options:
+  --from=number
+  --to=number
+  --via=number
+  --input=format:number:filename
+  --message=
+
+  --sip-from   = sip-identity
+  --sip-to
+  --sip-proxy=proto:user:pass\@host:port
+
+  --sip-listen             Default listen_addr is laddr for peer, listen_port is random
+  --rtp-listen
+  --rtp-codecs             List is in our prefered order
+  --rtp-ptime              Default 20ms
 
 Is is required to specify at least --store-to or --send-email option.
 EOD
@@ -2497,19 +2715,24 @@ EOD
 }
 
 my %options;
+my %multi_options = map { $_ => [] } qw(input);
 foreach (@ARGV) {
 	die "$0: Invalid argument $_\n" unless $_ =~ /^--([^=]+)=(.*)$/;
-	die "$0: Option --$1 was already specified\n" if exists $options{$1};
-	$options{$1} = $2;
+	if (exists $multi_options{$1}) {
+		push @{$multi_options{$1}}, $2;
+	} else {
+		die "$0: Option --$1 was already specified\n" if exists $options{$1};
+		$options{$1} = $2;
+	}
 }
 
 my $protocol = exists $options{protocol} ? delete $options{protocol} : 'sip';
 die "$0: Unknown protocol $protocol\n" unless $protocol eq 'sip';
 
 my $mode = exists $options{mode} ? delete $options{mode} : 'receive';
-die "$0: Unknown mode $mode\n" unless $mode eq 'receive';
+die "$0: Unknown mode $mode\n" unless $mode =~ /^(?:send|receive)$/;
 
-my $role = exists $options{role} ? delete $options{role} : 'dual';
+my $role = exists $options{role} ? delete $options{role} : ($mode eq 'receive') ? 'dual' : 'te';
 die "$0: Unknown role $role\n" unless $role =~ /^(?:te|sc|dual)$/;
 
 my $country = exists $options{country} ? delete $options{country} : undef;
@@ -2527,18 +2750,165 @@ if (defined $country) {
 	die "$0: Invalid country code $country\n" unless defined $check;
 }
 
-my $frag_cache_opt = exists $options{'frag-cache'} ? delete $options{'frag-cache'} : 'mem';
-die "$0: Invalid --frag-cache option $frag_cache_opt\n" unless $frag_cache_opt =~ /^(.*?|mem|none)(?:,([0-9]+))?(,atexit)?$/ and not ($1 eq 'none' and (defined $2 or defined $3));
-my $frag_cache_file = ($1 ne 'mem' and $1 ne 'none') ? $1 : undef;
-my $frag_cache_expire = (defined $2) ? $2 : 1440;
-my $frag_cache_disabled = ($1 eq 'none');
-my $frag_cache_expire_atexit = (defined $3 or $1 eq 'mem');
+my ($frag_cache_file, $frag_cache_expire, $frag_cache_disabled, $frag_cache_expire_atexit);
+
+if ($mode eq 'receive') {
+	my $frag_cache_opt = exists $options{'frag-cache'} ? delete $options{'frag-cache'} : 'mem';
+	die "$0: Invalid --frag-cache option $frag_cache_opt\n" unless $frag_cache_opt =~ /^(.*?|mem|none)(?:,([0-9]+))?(,atexit)?$/ and not ($1 eq 'none' and (defined $2 or defined $3));
+	my $frag_cache_file = ($1 ne 'mem' and $1 ne 'none') ? $1 : undef;
+	my $frag_cache_expire = (defined $2) ? $2 : 1440;
+	my $frag_cache_disabled = ($1 eq 'none');
+	my $frag_cache_expire_atexit = (defined $3 or $1 eq 'mem');
+
+	$store_to_dir = delete $options{'store-to-dir'} if exists $options{'store-to-dir'};
+	$store_to_dir =~ s/(?<=.)\/$// if defined $store_to_dir;
+	die "$0: Directory $store_to_dir does not exist\n" if defined $store_to_dir and not -d $store_to_dir;
+
+	my $send_email = exists $options{'send-email'} ? delete $options{'send-email'} : undef;
+	if (defined $send_email) {
+		die "$0: Invalid --send-email option $send_email\n" unless $send_email =~ /^([^,]+)(?:,([^,]+))?$/;
+		$send_email_env_to = $1;
+		$send_email_env_from = $2;
+	}
+}
+
+my ($from, $to, $via, @tpdus);
+
+if ($mode eq 'send') {
+	die "$0: Unsupported role dual in send mode\n" if $role eq 'dual';
+
+	$from = exists $options{from} ? delete $options{from} : undef;
+	$to = exists $options{to} ? delete $options{to} : undef;
+	$via = exists $options{via} ? delete $options{via} : undef;
+
+	my $message = exists $options{message} ? delete $options{message} : undef;
+	if (defined $message) {
+		my $number = ($role eq 'sc') ? $from : $to;
+		die "$0: Missing number for message\n" unless defined $number;
+		my $tpdu;
+		if ($role eq 'sc') {
+			my @time = localtime(time);
+			my $tz = int((timegm(@time) - timelocal(@time)) / 60);
+			my $scts = [ 1900+$time[5], 1+$time[4], $time[3], $time[2], $time[1], $time[0], ($tz < 0 ? '-' : ''), int(abs($tz)/60), abs($tz)%60 ];
+			$tpdu = tpdu_encode_deliver(0, 0, 0, 0, $number, $scts, 0, 0, 0, undef, 0, 0, $message);
+		} else {
+			my $sr = 0; # disable status report request
+			$tpdu = tpdu_encode_submit(0, $sr, 0, 0, $number, 0, undef, 0, undef, undef, 0, 0, $message);
+		}
+
+		push @tpdus, $tpdu;
+	}
+
+	foreach (@{$multi_options{input}}) {
+		my ($format, $number, $filename) = ($_ =~ /^(?:(rpdu|tpdu|atpdu|inline):)?(?:([^:]*):)?(.*)$/);
+
+		if (not defined $format) {
+			if ($filename =~ /\.tpdu$/) {
+				$format = 'tpdu';
+			} elsif ($filename =~ /\.(?:at)?pdu$/) {
+				$format = 'atpdu';
+			} elsif ($filename =~ /\.(?:sms|rpdu)$/) {
+				$format = 'rpdu';
+			} elsif ($filename =~ /\.txt$/) {
+				$format = 'txt';
+			} else {
+				die "$0: Unknown format for input file $filename\n";
+			}
+		}
+
+		$number = undef if defined $number and not length $number;
+		if ($role eq 'sc') {
+			die "$0: Originating From and Number for file $filename does not match\n" if defined $from and defined $number and $from ne $number;
+			$number = $from unless defined $number;
+		} else {
+			die "$0: Destination To and Number for file $filename does not match\n" if defined $to and defined $number and $to ne $number;
+			$number = $to unless defined $number;
+		}
+
+		my ($tpdu, $payload);
+		if ($format eq 'inline') {
+			$payload = $filename;
+		} else {
+			my $fh;
+			if ($filename eq '-') {
+				$fh = *STDIN;
+				binmode $fh, ':raw';
+			} else {
+				open $fh, '<:raw', $filename or die "$0: Cannot open input file $filename: $!\n";
+			}
+			$payload = do { local $/; <$fh> };
+			close $fh;
+			die "$0: Cannot read input file $filename\n" unless defined $payload;
+		}
+
+		if ($format eq 'tpdu') {
+			$tpdu = $payload;
+		} elsif ($format eq 'atpdu') {
+			(undef, $tpdu) = atpdu_decode($payload);
+		} elsif ($format eq 'rpdu') {
+			(undef, undef, undef, $tpdu) = rpdu_decode($payload);
+		} elsif ($format eq 'txt' or $format eq 'inline') {
+			die "$0: Missing number for input text file $filename\n" unless defined $number;
+			if ($role eq 'sc') {
+				my @time = localtime(time);
+				my $tz = int((timegm(@time) - timelocal(@time)) / 60);
+				my $scts = [ 1900+$time[5], 1+$time[4], $time[3], $time[2], $time[1], $time[0], ($tz < 0 ? '-' : ''), int(abs($tz)/60), abs($tz)%60 ];
+				$tpdu = tpdu_encode_deliver(0, 0, 0, 0, $number, $scts, 0, 0, 0, undef, 0, 0, $payload);
+			} else {
+				my $sr = 0; # disable status report request
+				$tpdu = tpdu_encode_submit(0, $sr, 0, 0, $number, 0, undef, 0, undef, undef, 0, 0, $payload);
+			}
+		} else {
+			die "$0: Unsupported input format $format\n";
+		}
+		die "$0: Broken input file $filename\n" unless defined $tpdu;
+
+		my ($mti, @tpdu_data) = tpdu_decode($tpdu);
+		die "$0: Broken input file $filename\n" unless defined $mti;
+		if ($role eq 'sc' and $mti == 1) {
+			die "$0: Missing number for file $filename\n" unless defined $number;
+			$tpdu_data[6] = $number;
+			my @time = localtime(time);
+			my $tz = int((timegm(@time) - timelocal(@time)) / 60);
+			my $scts = [ 1900+$time[5], 1+$time[4], $time[3], $time[2], $time[1], $time[0], ($tz < 0 ? '-' : ''), int(abs($tz)/60), abs($tz)%60 ];
+			$tpdu_data[7] = $scts;
+			$tpdu = tpdu_encode(0, @tpdu_data);
+		} elsif ($role eq 'te' and $mti != 1) {
+			die "$0: Input file $filename is status report\n" if $mti == 2;
+			die "$0: Missing number for file $filename\n" unless defined $number;
+			$tpdu_data[6] = $number;
+			$tpdu = tpdu_encode(1, @tpdu_data);
+		}
+
+		push @tpdus, $tpdu;
+	}
+}
+
+my ($sip_auth_user, $sip_auth_pass);
+
+my $sip_from = exists $options{'sip-from'} ? delete $options{'sip-from'} : undef;
+my $sip_to = exists $options{'sip-to'} ? delete $options{'sip-to'} : undef;
+my $sip_proxy = exists $options{'sip-proxy'} ? delete $options{'sip-proxy'} : '';
+die "$0: Invalid --sip-proxy option $sip_proxy\n" unless $sip_proxy =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?$/;
+my $sip_peer_proto = $1;
+$sip_auth_user = $2 if defined $2;
+$sip_auth_pass = $3 if defined $3;
+my $sip_peer_host = (length $4) ? $4 : undef;
+my $sip_peer_port = (defined $5) ? $5 : (not defined $sip_peer_host) ? undef : (defined $sip_peer_proto and $sip_peer_proto eq 'tls') ? 5061 : 5060;
+if (not defined $sip_peer_host and defined $sip_to) {
+	my ($sip_to_uri) = sip_split_name_addr($sip_to);
+	my ($sip_to_domain, $sip_to_user, $sip_to_proto) = sip_uri2parts($sip_to_uri);
+	$sip_to_domain =~ /^(.*?)(?::(\w+))?$/;
+	my ($sip_to_host, $sip_to_port) = ($1, $2);
+	$sip_peer_host = $sip_to_host;
+	$sip_peer_port = defined $sip_to_port ? $sip_to_port : $sip_to_proto eq 'sips' ? 5061 : 5060;
+}
 
 my $sip_register = exists $options{'sip-register'} ? delete $options{'sip-register'} : '';
 die "$0: Invalid --sip-register $sip_register\n" unless $sip_register =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^:]*|\[[^\]]*\])(?::([0-9]+))?$/;
 my $sip_register_proto = $1;
-my $sip_auth_user = $2;
-my $sip_auth_pass = $3;
+$sip_auth_user = $2 if defined $2;
+$sip_auth_pass = $3 if defined $3;
 my $sip_register_host = (length $4) ? $4 : undef;
 my $sip_register_port = (defined $5) ? $5 : undef;
 my $sip_register_timeout = exists $options{'sip-register-timeout'} ? delete $options{'sip-register-timeout'} : '';
@@ -2550,13 +2920,15 @@ $sip_register_timeout[2] = 30 unless defined $sip_register_timeout[2];
 
 my $sip_listen = exists $options{'sip-listen'} ? delete $options{'sip-listen'} : '';
 die "$0: Invalid --sip-listen option $sip_listen\n" unless $sip_listen =~ /^(?:(tcp|udp|tls):)?([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?(?:\/([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?)?$/;
-my $sip_proto = (defined $1) ? $1 : (defined $sip_register_proto) ? $sip_register_proto : 'udp';
+my $sip_proto = (defined $1) ? $1 : (defined $sip_peer_proto) ? $sip_peer_proto : (defined $sip_register_proto) ? $sip_register_proto : 'udp';
+die "$0: Protocol for --sip-listen and --sip-proxy does not match\n" if defined $sip_proto and defined $sip_peer_proto and $sip_proto ne $sip_peer_proto;
 die "$0: Protocol for --sip-listen and --sip-register does not match\n" if defined $sip_proto and defined $sip_register_proto and $sip_proto ne $sip_register_proto;
 my $sip_listen_addr = (length $2) ? $2 : undef;
-my $sip_listen_port = (defined $3) ? $3 : (defined $sip_register_host) ? undef : ($sip_proto eq 'tls') ? 5061 : 5060;
+my $sip_listen_port = (defined $3) ? $3 : ($mode eq 'send' or defined $sip_register_host) ? undef : ($sip_proto eq 'tls') ? 5061 : 5060;
 my $sip_public_addr = (defined $4 and length $4) ? $4 : undef;
 my $sip_public_port = (defined $5) ? $5 : $sip_listen_port;
-$sip_listen_addr = (defined $sip_register_host and $sip_register_host =~ /:/) ? '[::]' : '0.0.0.0' if not defined $sip_listen_addr;
+$sip_listen_addr = ((defined $sip_peer_host and $sip_peer_host =~ /:/) or (defined $sip_register_host and $sip_register_host =~ /:/)) ? '[::]' : '0.0.0.0' if not defined $sip_listen_addr and $mode ne 'send';
+die "$0: IP protocol for --sip-listen and --sip-proxy does not match\n" if defined $sip_peer_host and defined $sip_listen_addr and (($sip_peer_host =~ /:/ and $sip_listen_addr !~ /:/) or ($sip_peer_host =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ and $sip_listen_addr =~ /:/));
 die "$0: IP protocol for --sip-listen and --sip-register does not match\n" if defined $sip_register_host and (($sip_register_host =~ /:/ and $sip_listen_addr !~ /:/) or ($sip_register_host =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ and $sip_listen_addr =~ /:/));
 $sip_public_addr = $sip_listen_addr unless defined $sip_public_addr;
 $sip_public_addr = undef if defined $sip_public_addr and ip_addr_is_wildcard($sip_public_addr);
@@ -2611,30 +2983,22 @@ die "$0: Invalid RTP codec $_\n" foreach grep { $_ !~ /^(?:ulaw|alaw)$/ } @rtp_c
 my $rtp_ptime = exists $options{'rtp-ptime'} ? $options{'rtp-ptime'} : 'peer';
 die "$0: Invalid RTP ptime $rtp_ptime\n" unless $rtp_ptime =~ /^(?:[0-9]+|peer)$/;
 
-$store_to_dir = delete $options{'store-to-dir'} if exists $options{'store-to-dir'};
-die "$0: Directory $store_to_dir does not exist\n" if defined $store_to_dir and not -d $store_to_dir;
-
-my $send_email = exists $options{'send-email'} ? delete $options{'send-email'} : undef;
-if (defined $send_email) {
-	die "$0: Invalid --send-email option $send_email\n" unless $send_email =~ /^([^,]+)(?:,([^,]+))?$/;
-	$send_email_env_to = $1;
-	$send_email_env_from = $2;
-}
-
 my ($extra_key) = sort keys %options;
 die "$0: Unknown option --$extra_key\n" if defined $extra_key;
 
-if (defined $frag_cache_file) {
-	if (-e $frag_cache_file) {
-		$frag_cache = retrieve($frag_cache_file);
-		die "$0: Cache file $frag_cache_file is in incompatible format\n" unless defined $frag_cache and ref $frag_cache eq 'HASH';
-	} else {
+if ($mode eq 'receive') {
+	if (defined $frag_cache_file) {
+		if (-e $frag_cache_file) {
+			$frag_cache = retrieve($frag_cache_file);
+			die "$0: Cache file $frag_cache_file is in incompatible format\n" unless defined $frag_cache and ref $frag_cache eq 'HASH';
+		} else {
+			$frag_cache = {};
+		}
+		store($frag_cache, $frag_cache_file);
+		$frag_cache_file_time = time;
+	} elsif (not $frag_cache_disabled) {
 		$frag_cache = {};
 	}
-	store($frag_cache, $frag_cache_file);
-	$frag_cache_file_time = time;
-} elsif (not $frag_cache_disabled) {
-	$frag_cache = {};
 }
 
 protocol_sip_loop(
@@ -2666,7 +3030,32 @@ protocol_sip_loop(
 	rtp_public_port_offset => $rtp_public_port_offset,
 	rtp_codecs => \@rtp_codecs,
 	rtp_ptime => $rtp_ptime,
-);
+) if $mode eq 'receive';
+
+protocol_sip_loop(
+	mode => $mode,
+	role => $role,
+	country => $country,
+	tpdus => \@tpdus,
+	sip_from => $sip_from,
+	sip_to => $sip_to,
+	sip_auth_user => $sip_auth_user,
+	sip_auth_pass => $sip_auth_pass,
+	sip_peer_host => $sip_peer_host,
+	sip_peer_port => $sip_peer_port,
+	sip_proto => $sip_proto,
+	sip_listen_addr => $sip_listen_addr,
+	sip_listen_port => $sip_listen_port,
+	sip_public_addr => $sip_public_addr,
+	sip_public_port => $sip_public_port,
+	rtp_listen_addr => $rtp_listen_addr,
+	rtp_listen_min_port => $rtp_listen_min_port,
+	rtp_listen_max_port => $rtp_listen_max_port,
+	rtp_public_addr => $rtp_public_addr,
+	rtp_public_port_offset => $rtp_public_port_offset,
+	rtp_codecs => \@rtp_codecs,
+	rtp_ptime => $rtp_ptime,
+) if $mode eq 'send';
 
 process_frag_cache(-1, $country) if $frag_cache_expire_atexit;
 store_frag_cache($frag_cache_file) if defined $frag_cache_file;
