@@ -2233,7 +2233,7 @@ sub protocol_sip_loop {
 			$param->{fsms_headers}->{request} = [ ($request->as_parts)[1] ];
 			$param->{fsms_init_timer} = $init_timer;
 
-			return $request->create_response('200', 'OK', { contact => "$sip_proto_uri:$contact_addr:$sip_public_port" }, $sdp);
+			return $request->create_response('200', 'OK', { contact => "$sip_proto_uri:$contact_addr:$contact_port" }, $sdp);
 		},
 		init_media => sub {
 			my ($call, $param) = @_;
