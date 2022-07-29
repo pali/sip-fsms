@@ -2212,7 +2212,7 @@ sub protocol_sip_loop {
 				$call->bye();
 			});
 
-			my $sdp = Net::SIP::SDP->new(
+			my $sdp = eval { Net::SIP::SDP->new(
 				{
 					addr => $sdp_addr,
 				},
@@ -2227,7 +2227,13 @@ sub protocol_sip_loop {
 						"ptime:$ptime",
 					],
 				},
-			);
+			) };
+			if (not defined $sdp) {
+				warn localtime . " - Error: SDP parameters are invalid\n";
+				$call->cleanup();
+				return $request->create_response('488', 'Not Acceptable Here');
+			}
+
 			$param->{rtp_param} = [ $fmt, int(8000*$ptime/1000), $ptime/1000 ];
 			$param->{sdp} = $sdp;
 			$param->{media_lsocks} = [ [ $rtp_sock, $rtcp_sock ] ];
