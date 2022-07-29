@@ -2686,8 +2686,7 @@ SIP receive options:
   --remote-sc-number=list  --remote-number for sc when receiver is in te role (default --remote-number)
   --local-sc-number=list   --local-number for sc when receiver is in sc role (default --local-number)
   --remote-te-number=list  --remote-number for te when receiver is in sc role (default --remtoe-number)
-
-  --sip-identity=identity  SIP identity (default "F-SMS <sip:fsms\@localhost>")
+  --sip-identity=identity  SIP identity (default sip-register-user\@sip-register-host or "F-SMS <sip:fsms\@localhost>")
   --sip-accept-uri=regex   Perl regex with SIP URIs for incoming calls (default ^.*\$)
   --sip-register=format    format: proto:user:pass\@host:port (default without registration)
   --sip-register-timeout=f format: expires,init,retry  expires - register expiration (0 - server default), init - initial register attemps, retry - timeout after failed registration (default expires=0 init=1 retry=30)
@@ -2967,7 +2966,7 @@ my $remote_number = parse_number_option('remote-number', 'p-asserted-identity:te
 my $remote_sc_number = parse_number_option('remote-sc-number', $remote_number);
 my $remote_te_number = parse_number_option('remote-te-number', $remote_number);
 
-my $sip_identity = exists $options{'sip-identity'} ? delete $options{'sip-identity'} : ('F-SMS <' . (($sip_proto eq 'tls') ? 'sips' : 'sip') . ':fsms@localhost>');
+my $sip_identity = exists $options{'sip-identity'} ? delete $options{'sip-identity'} : ('F-SMS <' . (($sip_proto eq 'tls') ? 'sips' : 'sip') . ':' . ((defined $sip_auth_user) ? $sip_auth_user : 'fsms') . '@' . ((defined $sip_register_host) ? $sip_register_host : 'localhost') . '>');
 my $sip_accept_uri_re = exists $options{'sip-accept-uri'} ? delete $options{'sip-accept-uri'} : undef;
 $sip_accept_uri_re = qr/$sip_accept_uri_re/ if defined $sip_accept_uri_re;
 
