@@ -1842,6 +1842,10 @@ sub process_full_message {
 		$to = format_number($smte, $country);
 	}
 
+	$from = 'unknown' unless defined $from;
+	$to = 'unknown' unless defined $to;
+	$via = 'unknown' unless defined $via;
+
 	warn localtime . " - Received SMS for $to from $from via $via\n";
 
 	my $rpdu_smte = number_for_rpdu($smte);
