@@ -2134,8 +2134,11 @@ sub protocol_sip_loop {
 			}
 
 			my ($rtp_port, $rtp_sock, $rtcp_sock) = create_rtp_sockets($rtp_listen_addr, 2, $rtp_listen_min_port, $rtp_listen_max_port);
-			$rtp_sock or do { warn localtime . " - Error: Cannot create rtp socket at $rtp_listen_addr: $!\n"; $call->cleanup(); return $request->create_response('503', 'Service Unavailable'); };
-			$rtcp_sock or do { warn localtime . " - Error: Cannot create rtcp socket at $rtp_listen_addr: $!\n"; $call->cleanup(); return $request->create_response('503', 'Service Unavailable'); };
+			if (not $rtp_sock or not $rtcp_sock) {
+				warn localtime . " - Error: Cannot create rtp or rtcp socket at $rtp_listen_addr from range $rtp_listen_min_port-$rtp_listen_max_port: $!\n";
+				$call->cleanup();
+				return $request->create_response('503', 'Service Unavailable');
+			}
 
 			my ($codec, $sdp_addr_peer, $fmt_peer, $ptime_peer);
 			my $sdp_peer = $param->{sdp_peer};
