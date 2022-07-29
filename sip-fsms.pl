@@ -2547,6 +2547,8 @@ sub protocol_sip_loop {
 		recv_bye => sub {
 			my ($param) = @_;
 			warn localtime . " - Other side hangup\n";
+			my $init_timer = delete $param->{fsms_init_timer};
+			$init_timer->cancel() if $init_timer;
 			$param->{fsms_cleanup}->() if exists $param->{fsms_cleanup};
 			if ($mode eq 'send') {
 				# wait two seconds and reply to additional retransmission of bye packet
@@ -2560,6 +2562,8 @@ sub protocol_sip_loop {
 		cb_cleanup => sub {
 			my ($call) = @_;
 			my $param = $call->{param};
+			my $init_timer = delete $param->{fsms_init_timer};
+			$init_timer->cancel() if $init_timer;
 			my $cleanup = delete $param->{fsms_cleanup};
 			$cleanup->() if defined $cleanup;
 			if ($mode eq 'receive') {
