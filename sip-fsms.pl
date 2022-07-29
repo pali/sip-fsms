@@ -2177,8 +2177,8 @@ sub protocol_sip_loop {
 				return $request->create_response('488', 'Not Acceptable Here');
 			}
 
-			if (ip_addr_is_invalid($sdp_addr_peer) or (not ip_addr_is_reserved($param->{fsms_peer_addr}) and ip_addr_is_reserved($sdp_addr_peer) and ip_canonical($param->{fsms_peer_addr}) ne ip_canonical($sdp_addr_peer))) {
-				warn localtime . " - Peer is behind NAT and has not announced public address in SDP, ignoring private address from SDP\n";
+			if (ip_addr_is_invalid($sdp_addr_peer) or (ip_addr_is_reserved($param->{fsms_peer_addr}) != ip_addr_is_reserved($sdp_addr_peer) and ip_canonical($param->{fsms_peer_addr}) ne ip_canonical($sdp_addr_peer))) {
+				warn localtime . " - Peer is behind NAT and has not announced correct address in SDP, ignoring address from SDP\n";
 				my @media_peer = $sdp_peer->get_media();
 				my $raddr = $param->{media_raddr};
 				foreach my $i (0..$#$raddr) {
