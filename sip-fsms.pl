@@ -744,16 +744,18 @@ sub tpdu_decode_dcs {
 }
 
 sub tpdu_encode_dcs {
-	my ($mc, $ad, $mwi, $ud_isbin, $data) = @_;
+	my ($mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2) = @_;
+	die "TPDU message class is invalid\n" if defined $mc and ($mc < 0 or $mc > 3);
 	die "TPDU message class and message waiting indicator cannot be used together\n" if defined $mc and defined $mwi;
 	die "TPDU binary data cannot contain wide characters\n" if $ud_isbin and $data =~ /[^\x00-\xff]/;
-	my $ud_enc = $ud_isbin ? 1 : eval { encode('GSM0338', decode('UTF-8', $data), 1); 1 } ? 0 : 2;
+	my $ud_enc = $ud_isbin ? 1 : (defined $ud_ucs2) ? ($ud_ucs2 ? 2 : 0) : eval { encode('GSM0338', decode('UTF-8', $data), 1); 1 } ? 0 : 2;
 	my $dcs = 0;
 	if (defined $mwi) {
 		$dcs |= 0b11000000;
 		$dcs |= ($mwi->[0] & 0b11);
 		$dcs |= 0b00001000 if $mwi->[1];
 		die "TPDU message waiting indicator cannot be used with binary data\n" if $ud_enc == 1;
+		die "TPDU message waiting indicator cannot be used together with compression\n" if $ud_cd;
 		die "TPDU message waiting indicator and automatic deletion cannot be used with UCS-2 data\n" if $ad and $ud_enc == 2;
 		$dcs |= ($ud_enc == 2 ? 0b00100000 : 0b00010000) unless $ad;
 	} else {
@@ -762,6 +764,7 @@ sub tpdu_encode_dcs {
 			$dcs |= $mc;
 		}
 		$dcs |= 0b01000000 if $ad;
+		$dcs |= 0b00100000 if $ud_cd;
 		$dcs |= ($ud_enc << 2);
 	}
 	return (chr($dcs), $ud_enc);
@@ -1008,52 +1011,54 @@ sub tpdu_decode_command {
 }
 
 sub tpdu_encode {
-	my ($mti, $mms, $rd, $sr, $rp, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwi, $vp, $udh, $ud_isbin, $data);
+	# TODO: change $mwi to $mwis
+	my ($mti, $mms, $rd, $lp, $sr, $rp, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwi, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $data, $ud_ucs2, $udh) = @_;
 	my $tpdu = '';
 	my $is_deliver = $mti == 0;
 	my $is_submit = $mti == 1;
 	my $is_status = $mti == 2;
 	die "TPDU MTI unknown value $mti\n" unless $is_deliver or $is_submit or $is_status;
 	my ($vpf, $vpd);
-	($vpf, $vpd) = tpdu_encode_vp($vp) if $is_submit;
+	($vpf, $vpd) = tpdu_encode_vp(defined $vp ? @{$vp} : ()) if $is_submit;
 	my $first = 0;
 	$first |= ($mti & 0b00000011);
 	$first |= 0b00000100 if not $is_submit and not $mms;
 	$first |= 0b00000100 if $is_submit and $rd;
 	$first |= ($vpf & 0b11) << 3 if $is_submit;
-	$first |= 0b00010000 if $sr;
+	$first |= 0b00001000 if not $is_submit and $lp;
+	$first |= 0b00100000 if $sr;
 	$first |= 0b01000000 if defined $udh;
 	$first |= 0b10000000 if not $is_submit and $rp;
 	$tpdu .= chr($first);
-	$tpdu .= chr($mr) if $is_deliver;
-	$tpdu .= tpdu_encode_address(@{$num});
+	$tpdu .= chr($mr || 0) unless $is_deliver;
+	$tpdu .= tpdu_encode_address(ref $num ? @{$num} : $num);
 	if ($is_status) {
 		$tpdu .= tpdu_encode_ts(@{$scts});
 		$tpdu .= tpdu_encode_ts(@{$dt});
 		$tpdu .= tpdu_encode_st(@{$st});
 	}
 	$tpdu .= chr($pid);
-	my ($dcs, $ud_enc) = tpdu_encode_dcs($mc, $ad, $mwi, $ud_isbin, $data);
+	my ($dcs, $ud_enc) = tpdu_encode_dcs($mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2);
 	$tpdu .= $dcs;
 	$tpdu .= tpdu_encode_ts(@{$scts}) if $is_deliver;
-	$tpdu .= $vpd;
+	$tpdu .= $vpd if $is_submit;
 	$tpdu .= tpdu_encode_ud($udh, $ud_enc, $data);
 	return $tpdu;
 }
 
 sub tpdu_encode_deliver {
-	my ($mms, $sr, $rp, $num, $scts, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $data) = @_;
-	return tpdu_encode(0, $mms, undef, $sr, $rp, undef, $num, $scts, undef, undef, $pid, $mc, $ad, $mwi, undef, $udh, $ud_isbin, $data);
+	my ($mms, $lp, $sr, $rp, $num, $scts, $pid, $mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2, $udh) = @_;
+	return tpdu_encode(0, $mms, undef, $lp, $sr, $rp, undef, $num, $scts, undef, undef, $pid, $mc, $ad, $mwi, undef, undef, undef, undef, undef, $ud_isbin, $ud_cd, $data, $ud_ucs2, $udh);
 }
 
 sub tpdu_encode_submit {
-	my ($rd, $sr, $rp, $mr, $num, $pid, $mc, $ad, $mwi, $vp, $udh, $ud_isbin, $data) = @_;
-	return tpdu_encode(1, undef, $rd, $sr, $rp, $mr, $num, undef, undef, undef, $pid, $mc, $ad, $mwi, $vp, $udh, $ud_isbin, $data);
+	my ($rd, $sr, $rp, $mr, $num, $pid, $mc, $ad, $mwi, $vp, $ud_isbin, $ud_cd, $data, $ud_ucs2, $udh) = @_;
+	return tpdu_encode(1, undef, $rd, undef, $sr, $rp, $mr, $num, undef, undef, undef, $pid, $mc, $ad, $mwi, $vp, undef, undef, undef, undef, $ud_isbin, $ud_cd, $data, $ud_ucs2, $udh);
 }
 
 sub tpdu_encode_status {
-	my ($mms, $sr, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $data) = @_;
-	return tpdu_encode(2, $mms, undef, $sr, undef, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwi, undef, $udh, $ud_isbin, $data);
+	my ($mms, $sr, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2, $udh) = @_;
+	return tpdu_encode(2, $mms, undef, undef, $sr, undef, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwi, undef, undef, undef, undef, undef, $ud_isbin, $ud_cd, $data, $ud_ucs2, $udh);
 }
 
 sub tpdu_encode_command {
@@ -1061,7 +1066,7 @@ sub tpdu_encode_command {
 }
 
 sub tpdu_encode_report {
-	my ($is_nack, $mti, $fcs, $scts, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $data) = @_;
+	my ($is_nack, $mti, $fcs, $scts, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud_cd, $data, $ud_ucs2) = @_;
 	my $tpdu = '';
 	$tpdu .= chr($mti);
 	$tpdu .= chr($fcs) if $is_nack;
@@ -1073,39 +1078,39 @@ sub tpdu_encode_report {
 	$tpdu .= tpdu_encode_ts(@{$scts}) if $mti == 1;
 	$tpdu .= chr($pid) if defined $pid;
 	my ($dcs, $ud_enc);
-	($dcs, $ud_enc) = tpdu_encode_dcs($mc, $ad, $mwi, $ud_isbin, $data) if defined $mc or $data;
+	($dcs, $ud_enc) = tpdu_encode_dcs($mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2) if defined $mc or $data;
 	$tpdu .= $dcs if defined $dcs;
 	$tpdu .= tpdu_encode_ud($udh, $ud_enc, $data) if defined $udh or defined $data;
 	return $tpdu;
 }
 
 sub tpdu_encode_deliver_report {
-	my ($is_nack, $fcs, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud) = @_;
-	return tpdu_encode_report($is_nack, 0, $fcs, undef, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud);
+	my ($is_nack, $fcs, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud_cd, $ud) = @_;
+	return tpdu_encode_report($is_nack, 0, $fcs, undef, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud_cd, $ud);
 }
 
 sub tpdu_encode_submit_report {
-	my ($is_nack, $fcs, $scts, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud) = @_;
-	return tpdu_encode_report($is_nack, 1, $fcs, $scts, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud);
+	my ($is_nack, $fcs, $scts, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud_cd, $ud) = @_;
+	return tpdu_encode_report($is_nack, 1, $fcs, $scts, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud_cd, $ud);
 }
 
 sub tpdu_encode_deliver_ack {
-	return tpdu_encode_deliver_report(0, undef, undef, undef, undef, undef, undef, undef, undef);
+	return tpdu_encode_deliver_report(0, undef, undef, undef, undef, undef, undef, undef, undef, undef);
 }
 
 sub tpdu_encode_submit_ack {
 	my ($scts) = @_;
-	return tpdu_encode_submit_report(0, undef, $scts, undef, undef, undef, undef, undef, undef, undef);
+	return tpdu_encode_submit_report(0, undef, $scts, undef, undef, undef, undef, undef, undef, undef, undef);
 }
 
 sub tpdu_encode_deliver_nack {
 	my ($fcs) = @_;
-	return tpdu_encode_deliver_report(1, $fcs, undef, undef, undef, undef, undef, undef undef);
+	return tpdu_encode_deliver_report(1, $fcs, undef, undef, undef, undef, undef, undef, undef, undef);
 }
 
 sub tpdu_encode_submit_nack {
 	my ($fcs, $scts) = @_;
-	return tpdu_encode_submit_report(0, $fcs, $scts, undef, undef, undef, undef, undef, undef, undef);
+	return tpdu_encode_submit_report(0, $fcs, $scts, undef, undef, undef, undef, undef, undef, undef, undef);
 }
 
 ### GSM Short Message Radio Layer ###
