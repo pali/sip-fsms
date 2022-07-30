@@ -2120,7 +2120,7 @@ sub protocol_sip_loop {
 			Listen => 100,
 		) : (),
 	);
-	die "Error: Cannot create local socket: $!\n" unless defined $sock;
+	die 'Error: Cannot ' . ($sip_peer_addr ? "connect to host $sock_proto:$sip_peer_host:$sip_peer_port" : "create local $sock_proto socket") . ": $!\n" unless defined $sock;
 	if (defined $sip_peer_addr and $sip_proto eq 'tls') {
 		# When socket is connected then Net::SIP::Leg->new expects that TLS handshake was already finished
 		eval { require IO::Socket::SSL; IO::Socket::SSL->import(); 1 } or die "Error: Cannot load IO::Socket::SSL: $@\n";
@@ -2208,7 +2208,7 @@ sub protocol_sip_loop {
 			}
 			$ua->register(expires => $sip_register_timeout[0], cb_final => $cb_register, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()), 'user-agent' => $sip_user_agent);
 		};
-		warn localtime . " - Registering to $sip_registrar...\n";
+		warn localtime . " - Registering " . ((defined $sip_peer_addr) ? "$sip_proto:$sip_listen_addr:$sip_listen_port " : '') . "to $sip_registrar...\n";
 		$sub_register->();
 		if ($sip_register_timeout[1]) {
 			$ua->loop(\$init_registered);
@@ -2605,7 +2605,7 @@ sub protocol_sip_loop {
 
 	if ($mode eq 'receive') {
 		$ua->add_timer(30*60, sub { process_frag_cache($frag_cache_expire, $country) }, 30*60, 'process_frag_cache') if $frag_cache_expire;
-		warn localtime . " - Listening at $sip_proto:$sip_listen_addr:$sip_listen_port\n";
+		warn localtime . " - Listening at $sip_proto:$sip_listen_addr:$sip_listen_port\n" unless defined $sip_peer_addr;
 		$ua->listen(%receive_callbacks, %common_callbacks);
 	} else {
 		$rtp_listen_addr = ($sock->sockhost() !~ /^(?:0\.0\.0\.0|::)$/) ? $sock->sockhost() : laddr4dst($sip_peer_addr) unless defined $rtp_listen_addr;
@@ -2649,7 +2649,7 @@ sub protocol_sip_loop {
 			$ua->add_timer(20, $stop_cb);
 		}
 		if ($registered) {
-			warn localtime . " - Unregistering from $sip_registrar...\n";
+			warn localtime . " - Unregistering " . ((defined $sip_peer_addr) ? "$sip_proto:$sip_listen_addr:$sip_listen_port " : '') . "from $sip_registrar...\n";
 			$ua->register(expires => 0, cb_final => $stop_cb, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()), 'user-agent' => $sip_user_agent);
 			$ua->add_timer(5, $stop_cb) unless $stopping;
 		}
