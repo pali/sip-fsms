@@ -2121,6 +2121,16 @@ sub protocol_sip_loop {
 		) : (),
 	);
 	die "Error: Cannot create local socket: $!\n" unless defined $sock;
+	if (defined $sip_peer_addr and $sip_proto eq 'tls') {
+		# When socket is connected then Net::SIP::Leg->new expects that TLS handshake was already finished
+		eval { require IO::Socket::SSL; IO::Socket::SSL->import(); 1 } or die "Error: Cannot load IO::Socket::SSL: $@\n";
+		IO::Socket::SSL->start_SSL($sock,
+			SSL_verifycn_scheme => 'sip',
+			SSL_verifycn_name => $sip_peer_host,
+			SSL_hostname => ($sip_peer_host =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ or $sip_peer_host =~ /:/) ? undef : $sip_peer_host,
+		) or die "Error: Cannot start TLS session with $sip_peer_host:$sip_peer_port: $IO::Socket::SSL::SSL_ERROR\n";
+	}
+
 	$sip_listen_addr = $sock->sockhost();
 	$sip_listen_addr = "[$sip_listen_addr]" if $sip_listen_addr =~ /:/;
 	$sip_listen_port = $sock->sockport();
