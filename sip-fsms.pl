@@ -2121,7 +2121,7 @@ sub protocol_sip_loop {
 	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, (defined $sip_peer_host) ? (dst => "$sip_peer_host:$sip_peer_port") : (), contact => "$sip_proto_uri:$contact_addr:$contact_port");
 	die "Error: Cannot create leg at $sip_proto:$sip_listen_addr:$sip_listen_port: $!\n" unless defined $leg;
 
-	my $sip_registrar = defined $sip_register_host ? $sip_register_host . ($sip_register_port ? ":$sip_register_port" : '') : undef;
+	my $sip_registrar = defined $sip_register_host ? ($sip_proto_uri . ':' . $sip_register_host . ($sip_register_port ? ":$sip_register_port" : '')) : undef;
 	my $sip_outgoing_proxy = defined $sip_peer_host ? "$sip_proto_uri:$sip_peer_host:$sip_peer_port" : undef;
 	my $sip_auth = defined $sip_auth_user ? [ $sip_auth_user, $sip_auth_pass ] : undef;
 	my $ua = Net::SIP::Simple->new(from => $sip_identity, outgoing_proxy => $sip_outgoing_proxy, registrar => $sip_registrar, auth => $sip_auth, legs => [ $leg ]);
