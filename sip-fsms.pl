@@ -2092,9 +2092,9 @@ sub protocol_sip_loop {
 	my $sock_proto = ($sip_proto eq 'tls') ? 'tcp' : $sip_proto;
 	my $sip_proto_uri = ($sip_proto eq 'tls') ? 'sips' : 'sip';
 
-	# TODO: $sip_peer_host is hostname, do DNS lookup (NAPTR + SRV and A/AAAA)
-	# TODO: use Net::SIP::Dispatcher::resolve_uri
-	my $sip_peer_addr = $sip_peer_host;
+	# TODO: Do DNS lookup via Net::SIP::Dispatcher::resolve_uri which resolves also SRV
+	my $sip_peer_addr = defined $sip_peer_host ? hostname2ip((ip_string2parts(scalar sip_uri2parts($sip_peer_host)))[0]) : undef;
+	die "Error: Cannot resolve hostname $sip_peer_host\n" if defined $sip_peer_host and not defined $sip_peer_addr;
 
 	my $sip_peer_laddr = defined $sip_peer_addr ? laddr4dst($sip_peer_addr) : undef;
 	$sip_peer_laddr = "[$sip_peer_laddr]" if defined $sip_peer_laddr and $sip_peer_laddr =~ /:/;
@@ -2185,6 +2185,7 @@ sub protocol_sip_loop {
 			$register_timer->cancel() if defined $register_timer;
 			$register_timer = $ua->add_timer(60, sub { $cb_register->('FAIL', errno => 110) });
 			if (ip_addr_is_wildcard($contact_addr)) {
+				# TODO: Do DNS lookup via Net::SIP::Dispatcher::resolve_uri which resolves also SRV
 				my $dst_addr = hostname2ip((ip_string2parts(scalar sip_uri2parts($sip_register_host)))[0], $sock->sockdomain());
 				$dst_addr = ($contact_addr =~ /:/) ? '0100::' : '192.0.2.0' unless $dst_addr; # fallback to IPv6 Discard Prefix or IPv4 TEST-NET-1
 				$register_contact_addr = laddr4dst($dst_addr);
