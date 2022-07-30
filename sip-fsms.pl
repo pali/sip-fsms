@@ -2121,10 +2121,11 @@ sub protocol_sip_loop {
 	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, (defined $sip_peer_host) ? (dst => "$sip_peer_host:$sip_peer_port") : (), contact => "$sip_proto_uri:$contact_addr:$contact_port");
 	die "Error: Cannot create leg at $sip_proto:$sip_listen_addr:$sip_listen_port: $!\n" unless defined $leg;
 
+	my $sip_user_agent = "F-SMS $mode (Net::SIP $Net::SIP::VERSION)";
 	my $sip_registrar = defined $sip_register_host ? ($sip_proto_uri . ':' . $sip_register_host . ($sip_register_port ? ":$sip_register_port" : '')) : undef;
 	my $sip_outgoing_proxy = defined $sip_peer_host ? "$sip_proto_uri:$sip_peer_host:$sip_peer_port" : undef;
 	my $sip_auth = defined $sip_auth_user ? [ $sip_auth_user, $sip_auth_pass ] : undef;
-	my $ua = Net::SIP::Simple->new(from => $sip_identity, outgoing_proxy => $sip_outgoing_proxy, registrar => $sip_registrar, auth => $sip_auth, legs => [ $leg ]);
+	my $ua = Net::SIP::Simple->new(from => $sip_identity, outgoing_proxy => $sip_outgoing_proxy, registrar => $sip_registrar, auth => $sip_auth, legs => [ $leg ], options => { 'user-agent' => $sip_user_agent });
 	die "Error: Cannot create user agent for $sip_identity: $!\n" unless defined $ua;
 
 	my $stop;
@@ -2184,7 +2185,7 @@ sub protocol_sip_loop {
 				$dst_addr = ($contact_addr =~ /:/) ? '0100::' : '192.0.2.0' unless $dst_addr; # fallback to IPv6 Discard Prefix or IPv4 TEST-NET-1
 				$register_contact_addr = laddr4dst($dst_addr);
 			}
-			$ua->register(expires => $sip_register_timeout[0], cb_final => $cb_register, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()));
+			$ua->register(expires => $sip_register_timeout[0], cb_final => $cb_register, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()), 'user-agent' => $sip_user_agent);
 		};
 		warn localtime . " - Registering to $sip_registrar...\n";
 		$sub_register->();
@@ -2630,7 +2631,7 @@ sub protocol_sip_loop {
 		}
 		if ($registered) {
 			warn localtime . " - Unregistering from $sip_registrar...\n";
-			$ua->register(expires => 0, cb_final => $stop_cb, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()));
+			$ua->register(expires => 0, cb_final => $stop_cb, ($register_contact_addr ? (contact => "$sip_proto_uri:$register_contact_addr:$contact_port") : ()), 'user-agent' => $sip_user_agent);
 			$ua->add_timer(5, $stop_cb) unless $stopping;
 		}
 		$stop_cb->() unless $stopping or $registered;
