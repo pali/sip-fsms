@@ -2890,7 +2890,6 @@ if ($mode eq 'send') {
 
 my ($sip_auth_user, $sip_auth_pass);
 
-my $sip_to = exists $options{'sip-to'} ? delete $options{'sip-to'} : undef;
 my $sip_proxy = exists $options{'sip-proxy'} ? delete $options{'sip-proxy'} : '';
 die "$0: Invalid --sip-proxy option $sip_proxy\n" unless $sip_proxy =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?$/;
 my $sip_peer_proto = $1;
@@ -2898,14 +2897,6 @@ $sip_auth_user = $2 if defined $2;
 $sip_auth_pass = $3 if defined $3;
 my $sip_peer_host = (length $4) ? $4 : undef;
 my $sip_peer_port = (defined $5) ? $5 : (not defined $sip_peer_host) ? undef : (defined $sip_peer_proto and $sip_peer_proto eq 'tls') ? 5061 : 5060;
-if (not defined $sip_peer_host and defined $sip_to) {
-	my ($sip_to_uri) = sip_split_name_addr($sip_to);
-	my ($sip_to_domain, $sip_to_user, $sip_to_proto) = sip_uri2parts($sip_to_uri);
-	$sip_to_domain =~ /^(.*?)(?::(\w+))?$/;
-	my ($sip_to_host, $sip_to_port) = ($1, $2);
-	$sip_peer_host = $sip_to_host;
-	$sip_peer_port = defined $sip_to_port ? $sip_to_port : $sip_to_proto eq 'sips' ? 5061 : 5060;
-}
 
 my $sip_register = exists $options{'sip-register'} ? delete $options{'sip-register'} : '';
 die "$0: Invalid --sip-register $sip_register\n" unless $sip_register =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^:]*|\[[^\]]*\])(?::([0-9]+))?$/;
@@ -2930,6 +2921,17 @@ my $sip_listen_addr = (length $2) ? $2 : undef;
 my $sip_listen_port = (defined $3) ? $3 : ($mode eq 'send' or defined $sip_register_host) ? undef : ($sip_proto eq 'tls') ? 5061 : 5060;
 my $sip_public_addr = (defined $4 and length $4) ? $4 : undef;
 my $sip_public_port = (defined $5) ? $5 : $sip_listen_port;
+
+my $sip_to = exists $options{'sip-to'} ? delete $options{'sip-to'} : (defined $sip_peer_host and ((defined $via and $role eq 'te') or (defined $to and $role eq 'sc'))) ? ((($sip_proto eq 'tls') ? 'sips' : 'sip') . ':' . (($role eq 'te') ? $via : $to) . '@' . $sip_peer_host) : undef;
+
+if (not defined $sip_peer_host and defined $sip_to) {
+	my ($sip_to_uri) = sip_split_name_addr($sip_to);
+	my ($sip_to_domain, $sip_to_user, $sip_to_proto) = sip_uri2parts($sip_to_uri);
+	$sip_to_domain =~ /^(.*?)(?::(\w+))?$/;
+	my ($sip_to_host, $sip_to_port) = ($1, $2);
+	$sip_peer_host = $sip_to_host;
+	$sip_peer_port = defined $sip_to_port ? $sip_to_port : $sip_to_proto eq 'sips' ? 5061 : 5060;
+}
 
 my $sip_from = exists $options{'sip-from'} ? delete $options{'sip-from'} : ((($sip_proto eq 'tls') ? 'sips' : 'sip') . ':' . ((defined $sip_auth_user) ? $sip_auth_user : (defined $from and $role eq 'te') ? $from : (defined $via and $role eq 'sc') ? $via : 'fsms') . '@' . ((defined $sip_peer_host) ? $sip_peer_host : 'localhost'));
 
@@ -2991,6 +2993,11 @@ die "$0: Invalid RTP ptime $rtp_ptime\n" unless $rtp_ptime =~ /^(?:[0-9]+|peer)$
 
 my ($extra_key) = sort keys %options;
 die "$0: Unknown option --$extra_key\n" if defined $extra_key;
+
+if ($mode eq 'send') {
+	die "$0: Cannot determinate SIP peer, missing --sip-proxy or --sip-to\n" unless defined $sip_peer_host;
+	die "$0: Cannot determinate SIP recipient, missing --via/--to or --sip-to\n" unless defined $sip_to;
+}
 
 if ($mode eq 'receive') {
 	if (defined $frag_cache_file) {
