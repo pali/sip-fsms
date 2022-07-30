@@ -2087,8 +2087,6 @@ sub protocol_sip_loop {
 	my @rtp_codecs = @{$options{rtp_codecs}};
 	my $rtp_ptime = $options{rtp_ptime};
 
-	$sip_identity = $sip_from unless defined $sip_identity;
-
 	my $sock_proto = ($sip_proto eq 'tls') ? 'tcp' : $sip_proto;
 	my $sip_proto_uri = ($sip_proto eq 'tls') ? 'sips' : 'sip';
 
@@ -2137,7 +2135,7 @@ sub protocol_sip_loop {
 	my $sip_registrar = defined $sip_register_host ? ($sip_proto_uri . ':' . $sip_register_host . ($sip_register_port ? ":$sip_register_port" : '')) : undef;
 	my $sip_outgoing_proxy = defined $sip_peer_host ? "$sip_proto_uri:$sip_peer_host:$sip_peer_port" : undef;
 	my $sip_auth = defined $sip_auth_user ? [ $sip_auth_user, $sip_auth_pass ] : undef;
-	my $ua = Net::SIP::Simple->new(from => $sip_identity, outgoing_proxy => $sip_outgoing_proxy, registrar => $sip_registrar, auth => $sip_auth, legs => [ $leg ], options => { 'user-agent' => $sip_user_agent });
+	my $ua = Net::SIP::Simple->new(from => ($mode eq 'receive') ? $sip_identity : $sip_from, outgoing_proxy => $sip_outgoing_proxy, registrar => $sip_registrar, auth => $sip_auth, legs => [ $leg ], options => { 'user-agent' => $sip_user_agent });
 	die "Error: Cannot create user agent for $sip_identity: $!\n" unless defined $ua;
 
 	my $stop;
