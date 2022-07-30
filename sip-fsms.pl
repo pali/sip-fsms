@@ -2092,6 +2092,12 @@ sub protocol_sip_loop {
 	my $sock_proto = ($sip_proto eq 'tls') ? 'tcp' : $sip_proto;
 	my $sip_proto_uri = ($sip_proto eq 'tls') ? 'sips' : 'sip';
 
+	# Do not use local non-UDP listening socket when registering as it is incompatible with most SIP servers
+	if (defined $sip_register_host and $sip_proto ne 'udp') {
+		$sip_peer_host = $sip_register_host;
+		$sip_peer_port = $sip_register_port if defined $sip_register_port;
+	}
+
 	# TODO: Do DNS lookup via Net::SIP::Dispatcher::resolve_uri which resolves also SRV
 	my $sip_peer_addr = defined $sip_peer_host ? hostname2ip((ip_string2parts(scalar sip_uri2parts($sip_peer_host)))[0]) : undef;
 	die "Error: Cannot resolve hostname $sip_peer_host\n" if defined $sip_peer_host and not defined $sip_peer_addr;
