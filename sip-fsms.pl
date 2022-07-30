@@ -2092,7 +2092,11 @@ sub protocol_sip_loop {
 	my $sock_proto = ($sip_proto eq 'tls') ? 'tcp' : $sip_proto;
 	my $sip_proto_uri = ($sip_proto eq 'tls') ? 'sips' : 'sip';
 
-	my $sip_peer_laddr = defined $sip_peer_host ? laddr4dst($sip_peer_host) : undef;
+	# TODO: $sip_peer_host is hostname, do DNS lookup (NAPTR + SRV and A/AAAA)
+	# TODO: use Net::SIP::Dispatcher::resolve_uri
+	my $sip_peer_addr = $sip_peer_host;
+
+	my $sip_peer_laddr = defined $sip_peer_addr ? laddr4dst($sip_peer_addr) : undef;
 	$sip_peer_laddr = "[$sip_peer_laddr]" if defined $sip_peer_laddr and $sip_peer_laddr =~ /:/;
 	$sip_listen_addr = $sip_peer_laddr if not defined $sip_listen_addr and defined $sip_peer_laddr;
 
@@ -2106,7 +2110,7 @@ sub protocol_sip_loop {
 		($sock_proto eq 'tcp') ? (
 			Listen => 100,
 		) : ($mode eq 'send') ? (
-			PeerAddr => $sip_peer_host,
+			PeerAddr => $sip_peer_addr,
 			PeerPort => $sip_peer_port,
 		) : (),
 	);
@@ -2118,7 +2122,7 @@ sub protocol_sip_loop {
 	my $contact_addr = defined $sip_public_addr ? $sip_public_addr : (defined $sip_peer_laddr and ip_addr_is_wildcard($sip_listen_addr)) ? $sip_peer_laddr : $sip_listen_addr;
 	my $contact_port = $sip_public_port ? $sip_public_port : $sip_listen_port;
 
-	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, (defined $sip_peer_host) ? (dst => "$sip_peer_host:$sip_peer_port") : (), contact => "$sip_proto_uri:$contact_addr:$contact_port");
+	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, (defined $sip_peer_addr) ? (dst => "$sip_peer_addr:$sip_peer_port") : (), contact => "$sip_proto_uri:$contact_addr:$contact_port");
 	die "Error: Cannot create leg at $sip_proto:$sip_listen_addr:$sip_listen_port: $!\n" unless defined $leg;
 
 	my $sip_user_agent = "F-SMS $mode (Net::SIP $Net::SIP::VERSION)";
@@ -2261,7 +2265,7 @@ sub protocol_sip_loop {
 				$call->bye();
 				return;
 			}
-			if (ip_addr_is_invalid($sdp_addr) or (ip_addr_is_reserved($sip_peer_host) != ip_addr_is_reserved($sdp_addr) and ip_canonical($sip_peer_host) ne ip_canonical($sdp_addr))) {
+			if (ip_addr_is_invalid($sdp_addr) or (ip_addr_is_reserved($sip_peer_addr) != ip_addr_is_reserved($sdp_addr) and ip_canonical($sip_peer_addr) ne ip_canonical($sdp_addr))) {
 				warn localtime . " - Peer is behind NAT and has not announced correct address in SDP, ignoring address from SDP\n";
 				my @media_peer = $sdp_peer->get_media();
 				my $raddr = $param->{media_raddr};
@@ -2269,13 +2273,13 @@ sub protocol_sip_loop {
 					if (not defined $raddr->[$i]) {
 						if ($media_peer[$i]->{addr} eq $sdp_addr) {
 							my $range = $media_peer[$i]->{range} || 1;
-							my @socks = map { ip_parts2sockaddr($sip_peer_host, $media_peer[$i]->{port} + $_) } (0..$range-1);
+							my @socks = map { ip_parts2sockaddr($sip_peer_addr, $media_peer[$i]->{port} + $_) } (0..$range-1);
 							$raddr->[$i] = @socks == 1 ? $socks[0] : \@socks;
 						}
 					} else {
 						foreach (ref $raddr->[$i] ? @{$raddr->[$i]} : $raddr->[$i]) {
 							my ($addr, $port, $fam) = ip_sockaddr2parts($_);
-							$_ = ip_parts2sockaddr($sip_peer_host, $port, $fam) if $addr eq ip_canonical($sdp_addr);
+							$_ = ip_parts2sockaddr($sip_peer_addr, $port, $fam) if $addr eq ip_canonical($sdp_addr);
 						}
 					}
 				}
@@ -2587,7 +2591,7 @@ sub protocol_sip_loop {
 		warn localtime . " - Listening at $sip_proto:$sip_listen_addr:$sip_listen_port\n";
 		$ua->listen(%receive_callbacks, %common_callbacks);
 	} else {
-		$rtp_listen_addr = ($sock->sockhost() !~ /^(?:0\.0\.0\.0|::)$/) ? $sock->sockhost() : laddr4dst($sip_peer_host) unless defined $rtp_listen_addr;
+		$rtp_listen_addr = ($sock->sockhost() !~ /^(?:0\.0\.0\.0|::)$/) ? $sock->sockhost() : laddr4dst($sip_peer_addr) unless defined $rtp_listen_addr;
 		my ($rtp_port, $rtp_sock, $rtcp_sock) = create_rtp_sockets($rtp_listen_addr, 2, $rtp_listen_min_port, $rtp_listen_max_port);
 		die "Error: Cannot create rtp socket at $rtp_listen_addr: $!\n" unless defined $rtp_sock;
 		die "Error: Cannot create rtcp socket at $rtp_listen_addr: $!\n" unless defined $rtcp_sock;
