@@ -2107,11 +2107,11 @@ sub protocol_sip_loop {
 		V6Only => 1,
 		Reuse => 1,
 		ReuseAddr => 1,
-		($sock_proto eq 'tcp') ? (
-			Listen => 100,
-		) : ($mode eq 'send') ? (
+		(defined $sip_peer_addr) ? (
 			PeerAddr => $sip_peer_addr,
 			PeerPort => $sip_peer_port,
+		) : ($sock_proto eq 'tcp') ? (
+			Listen => 100,
 		) : (),
 	);
 	die "Error: Cannot create local socket: $!\n" unless defined $sock;
@@ -2122,7 +2122,7 @@ sub protocol_sip_loop {
 	my $contact_addr = defined $sip_public_addr ? $sip_public_addr : (defined $sip_peer_laddr and ip_addr_is_wildcard($sip_listen_addr)) ? $sip_peer_laddr : $sip_listen_addr;
 	my $contact_port = $sip_public_port ? $sip_public_port : $sip_listen_port;
 
-	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, (defined $sip_peer_addr) ? (dst => "$sip_peer_addr:$sip_peer_port") : (), contact => "$sip_proto_uri:$contact_addr:$contact_port");
+	my $leg = Net::SIP::Leg->new(proto => $sip_proto, sock => $sock, contact => "$sip_proto_uri:$contact_addr:$contact_port");
 	die "Error: Cannot create leg at $sip_proto:$sip_listen_addr:$sip_listen_port: $!\n" unless defined $leg;
 
 	my $sip_user_agent = "F-SMS $mode (Net::SIP $Net::SIP::VERSION)";
