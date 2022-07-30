@@ -2622,9 +2622,7 @@ sub protocol_sip_loop {
 		$call = $ua->invite($sip_to, media_lsocks => [ [ $rtp_sock, $rtcp_sock ] ], sdp => $sdp, %send_callbacks, %common_callbacks);
 	}
 
-	my %defaultsig = ( INT => $SIG{INT}, QUIT => $SIG{QUIT}, TERM => $SIG{TERM} );
-	my $sighandler = ($mode eq 'receive') ? sub {
-		$SIG{$_} = $defaultsig{$_} foreach keys %defaultsig;
+	my $exithandler = ($mode eq 'receive') ? sub {
 		warn localtime . " - Exit signal, not accepting new calls and scheduling call hangups...\n";
 		foreach my $call (grep { defined $_ } values %calls) {
 			$call->add_timer(15, sub { $call->bye() if defined $call });
@@ -2642,9 +2640,17 @@ sub protocol_sip_loop {
 		$stop_cb->() unless $stopping or $registered;
 		$stopping = 1;
 	} : sub {
-		$SIG{$_} = $defaultsig{$_} foreach keys %defaultsig;
 		warn localtime . " - Exit signal, not sending remaining messages and scheduling call hangup...\n";
 		# TODO
+	};
+	my %defaultsig = ( INT => $SIG{INT}, QUIT => $SIG{QUIT}, TERM => $SIG{TERM} );
+	my $sighandler = sub {
+		$SIG{$_} = $defaultsig{$_} foreach keys %defaultsig;
+		# Net::SIP event loop has not updated its own internal timestamp when this signal handler was called.
+		# Therefore any timers added in signal handler would be executed with smaller timeout as specified.
+		# So call real exit handler indirectly via Net::SIP event loop after internal timestamp is updated
+		# (to ensure that timers would work correctly) and do it via timer with non-zero but small timeout.
+		$ua->add_timer(0.01, $exithandler);
 	};
 	local ($SIG{INT}, $SIG{QUIT}, $SIG{TERM}) = ($sighandler, $sighandler, $sighandler);
 	warn localtime . " - Starting main loop\n";
