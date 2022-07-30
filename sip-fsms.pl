@@ -2890,7 +2890,6 @@ if ($mode eq 'send') {
 
 my ($sip_auth_user, $sip_auth_pass);
 
-my $sip_from = exists $options{'sip-from'} ? delete $options{'sip-from'} : undef;
 my $sip_to = exists $options{'sip-to'} ? delete $options{'sip-to'} : undef;
 my $sip_proxy = exists $options{'sip-proxy'} ? delete $options{'sip-proxy'} : '';
 die "$0: Invalid --sip-proxy option $sip_proxy\n" unless $sip_proxy =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?$/;
@@ -2931,6 +2930,9 @@ my $sip_listen_addr = (length $2) ? $2 : undef;
 my $sip_listen_port = (defined $3) ? $3 : ($mode eq 'send' or defined $sip_register_host) ? undef : ($sip_proto eq 'tls') ? 5061 : 5060;
 my $sip_public_addr = (defined $4 and length $4) ? $4 : undef;
 my $sip_public_port = (defined $5) ? $5 : $sip_listen_port;
+
+my $sip_from = exists $options{'sip-from'} ? delete $options{'sip-from'} : ((($sip_proto eq 'tls') ? 'sips' : 'sip') . ':' . ((defined $sip_auth_user) ? $sip_auth_user : (defined $from and $role eq 'te') ? $from : (defined $via and $role eq 'sc') ? $via : 'fsms') . '@' . ((defined $sip_peer_host) ? $sip_peer_host : 'localhost'));
+
 $sip_listen_addr = ((defined $sip_peer_host and $sip_peer_host =~ /:/) or (defined $sip_register_host and $sip_register_host =~ /:/)) ? '[::]' : '0.0.0.0' if not defined $sip_listen_addr and $mode ne 'send';
 die "$0: IP protocol for --sip-listen and --sip-proxy does not match\n" if defined $sip_peer_host and defined $sip_listen_addr and (($sip_peer_host =~ /:/ and $sip_listen_addr !~ /:/) or ($sip_peer_host =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ and $sip_listen_addr =~ /:/));
 die "$0: IP protocol for --sip-listen and --sip-register does not match\n" if defined $sip_register_host and (($sip_register_host =~ /:/ and $sip_listen_addr !~ /:/) or ($sip_register_host =~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ and $sip_listen_addr =~ /:/));
