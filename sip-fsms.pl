@@ -2095,6 +2095,8 @@ sub protocol_sip_loop {
 	# TODO: Do DNS lookup via Net::SIP::Dispatcher::resolve_uri which resolves also SRV
 	my $sip_peer_addr = defined $sip_peer_host ? hostname2ip((ip_string2parts(scalar sip_uri2parts($sip_peer_host)))[0]) : undef;
 	die "Error: Cannot resolve hostname $sip_peer_host\n" if defined $sip_peer_host and not defined $sip_peer_addr;
+	# TODO: Use DNS SRV lookup for port number
+	$sip_peer_port = ($sip_proto eq 'tls') ? 5061 : 5060 if defined $sip_peer_addr and not defined $sip_peer_port;
 
 	my $sip_peer_laddr = defined $sip_peer_addr ? laddr4dst($sip_peer_addr) : undef;
 	$sip_peer_laddr = "[$sip_peer_laddr]" if defined $sip_peer_laddr and $sip_peer_laddr =~ /:/;
@@ -2907,7 +2909,7 @@ my $sip_peer_proto = $1;
 $sip_auth_user = $2 if defined $2;
 $sip_auth_pass = $3 if defined $3;
 my $sip_peer_host = (length $4) ? $4 : undef;
-my $sip_peer_port = (defined $5) ? $5 : (not defined $sip_peer_host) ? undef : (defined $sip_peer_proto and $sip_peer_proto eq 'tls') ? 5061 : 5060;
+my $sip_peer_port = (defined $5) ? $5 : undef;
 
 my $sip_register = exists $options{'sip-register'} ? delete $options{'sip-register'} : '';
 die "$0: Invalid --sip-register $sip_register\n" unless $sip_register =~ /^(?:(tcp|udp|tls):)?(?:([^:]+)(?::([^@]+))?\@)?([^:]*|\[[^\]]*\])(?::([0-9]+))?$/;
@@ -2941,7 +2943,7 @@ if (not defined $sip_peer_host and defined $sip_to) {
 	$sip_to_domain =~ /^(.*?)(?::(\w+))?$/;
 	my ($sip_to_host, $sip_to_port) = ($1, $2);
 	$sip_peer_host = $sip_to_host;
-	$sip_peer_port = defined $sip_to_port ? $sip_to_port : $sip_to_proto eq 'sips' ? 5061 : 5060;
+	$sip_peer_port = $sip_to_port if defined $sip_to_port;
 }
 
 my $sip_from = exists $options{'sip-from'} ? delete $options{'sip-from'} : ((($sip_proto eq 'tls') ? 'sips' : 'sip') . ':' . ((defined $sip_auth_user) ? $sip_auth_user : (defined $from and $role eq 'te') ? $from : (defined $via and $role eq 'sc') ? $via : 'fsms') . '@' . ((defined $sip_peer_host) ? $sip_peer_host : 'localhost'));
