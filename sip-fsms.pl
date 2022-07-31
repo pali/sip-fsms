@@ -2693,13 +2693,13 @@ them to F-SMS via V.23 modulation and send via
 SIP audio call to remote side.
 
 Both roles are supported, application can act
-either as Terminal Equipment or as Service Center.
+either as Terminal Equipment or as Service Centre.
 
 Options:
   --help                   Show this help
   --protocol=sip           Application protocol: sip (default sip)
-  --mode=receive           Application mode: receive (default receive)
-  --role=te|sc|dual        Process role: te - Terminal Equipment, sc - Service Center, dual - Dual role based on incoming data (default dual)
+  --mode=send|receive      Application mode: receive (default receive)
+  --role=te|sc|dual        Process role: te - Terminal Equipment, sc - Service Centre, dual - Dual role based on incoming data (default dual in receive and te in send mode)
   --country=code           Country code for telephone numbers normalization (default none - no normalization)
 
 Receive options:
@@ -2714,33 +2714,36 @@ SIP receive options:
   --remote-sc-number=list  --remote-number for sc when receiver is in te role (default --remote-number)
   --local-sc-number=list   --local-number for sc when receiver is in sc role (default --local-number)
   --remote-te-number=list  --remote-number for te when receiver is in sc role (default --remtoe-number)
-  --sip-identity=identity  SIP identity (default sip-register-user\@sip-register-host or "F-SMS <sip:fsms\@localhost>")
-  --sip-accept-uri=regex   Perl regex with SIP URIs for incoming calls (default ^.*\$)
+  --sip-identity=identity  SIP identity "name <sip:user\@host>" (default name="F-SMS", user=sip-register-user or "fsms", host=sip-register-host or "localhost")
+  --sip-accept-uri=regex   Perl regex with allowed SIP URIs for incoming calls (default ^.*\$)
   --sip-register=format    format: proto:user:pass\@host:port (default without registration)
-  --sip-register-timeout=f format: expires,init,retry  expires - register expiration (0 - server default), init - initial register attemps, retry - timeout after failed registration (default expires=0 init=1 retry=30)
-
+  --sip-register-timeout=f format: expires,init,retry  expires - register expiration, init - initial register attemps, retry - timeout after failed registration (default expires=3600 init=1 retry=30)
   --sip-listen=format      format: proto:listen_addr:listen_port/public_addr:public_port (default proto=udp listen_addr=0.0.0.0 listen_port=default_for_proto public_addr=listen_addr public_port=listen_port)
   --rtp-listen=format      format: listen_addr:listen_min_port-listen_max_port/public_addr:public_min_port (default address is sip-listen with default Net::SIP RTP port range)
   --rtp-codecs=codecs      List of allowed codecs separated by comma, chosen codec is by peer preference (default ulaw,alaw)
   --rtp-ptime=ptime        Request receiving and sending RTP packet length in milliseconds (default same length as peer requested from us)
 
+Send options:
+  --from=number            Sender phone number
+  --to=number              Receiver phone number
+  --via=number             Service Centre number
+  --input=arg              SMS message from input argument "format:number:filename"
+  --message=msg            Body of plain text SMS message specified as command line argument
+
 SIP send options:
-  --from=number
-  --to=number
-  --via=number
-  --input=format:number:filename
-  --message=
+  --sip-from=format        format: sip:user\@host:port (default user is sip-proxy-user or from (in te role) or via (in sc role) or "fsms", default host is sip-proxy-host or "localhost", default port is not specified)
+  --sip-to=format          format: sip:user\@host:port (default user is via (in te role) or to (in sc role), default host is sip-proxy-host, default port is not specified)
+  --sip-proxy=format       format: proto:user:pass\@host:port (default no proxy - direct sip-to)
+  --sip-listen=format      format: proto:listen_addr:listen_port/public_addr:public_port (default proto=peer_proto listen_addr=peer_laddr listen_port=random public_addr=listen_addr public_port=listen_port)
+  --rtp-listen=format      format: listen_addr:listen_min_port-listen_max_port/public_addr:public_min_port (default address is sip-listen with default Net::SIP RTP port range)
+  --rtp-codecs=codecs      List of allowed codecs separated by comma in preferred order (default ulaw,alaw)
+  --rtp-ptime=ptime        Request receiving and sending RTP packet length in milliseconds (default 20ms)
 
-  --sip-from   = sip-identity
-  --sip-to
-  --sip-proxy=proto:user:pass\@host:port
+In receive mode it is required to specify at least --store-to-dir or --send-email option.
 
-  --sip-listen             Default listen_addr is laddr for peer, listen_port is random
-  --rtp-listen
-  --rtp-codecs             List is in our prefered order
-  --rtp-ptime              Default 20ms
+In send mode with te role it is required to specify at least --message/--input --to/--input --via/--sip-to --sip-proxy/--sip-to options.
 
-Is is required to specify at least --store-to or --send-email option.
+In send mode with sc role it is required to specify at least --message/--input --from/--input --to/--sip-to --sip-proxy/--sip-to options.
 EOD
 	exit 1;
 }
