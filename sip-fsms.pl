@@ -2739,6 +2739,9 @@ SIP send options:
   --rtp-codecs=codecs      List of allowed codecs separated by comma in preferred order (default ulaw,alaw)
   --rtp-ptime=ptime        Request receiving and sending RTP packet length in milliseconds (default 20ms)
 
+Password options:
+  --password-file=file     File name (or - for stdin) with password content, replaces password specified in --sip-register and --sip-proxy options
+
 In receive mode it is required to specify at least --store-to-dir or --send-email option.
 
 In send mode with te role it is required to specify at least --message/--input --to/--input --via/--sip-to --sip-proxy/--sip-to options.
@@ -2791,6 +2794,20 @@ if (defined $country) {
 		$check = phone2country($check_input);
 	}
 	die "$0: Invalid country code $country\n" unless defined $check;
+}
+
+my $password;
+my $password_file = exists $options{'password-file'} ? delete $options{'password-file'} : undef;
+if (defined $password_file) {
+	if ($password_file eq '-') {
+		$password = <STDIN>;
+		chomp $password;
+	} else {
+		open my $fh, '<', $password_file or die "$0: Cannot open password file $password_file: $!\n";
+		$password = do { local $/; <$fh> };
+		$password =~ s/\r?\n$//;
+		close $fh;
+	}
 }
 
 my ($frag_cache_file, $frag_cache_expire, $frag_cache_disabled, $frag_cache_expire_atexit);
@@ -2950,6 +2967,9 @@ my @sip_register_timeout = split /,/, $sip_register_timeout;
 $sip_register_timeout[0] = 3600 unless defined $sip_register_timeout[0];
 $sip_register_timeout[1] = 1 unless defined $sip_register_timeout[1];
 $sip_register_timeout[2] = 30 unless defined $sip_register_timeout[2];
+
+$sip_auth_pass = $password if defined $password;
+$sip_auth_pass = '' if defined $sip_auth_user and not defined $sip_auth_pass;
 
 my $sip_listen = exists $options{'sip-listen'} ? delete $options{'sip-listen'} : '';
 die "$0: Invalid --sip-listen option $sip_listen\n" unless $sip_listen =~ /^(?:(tcp|udp|tls):)?([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?(?:\/([^\[\]<>\/:]*|\[[^\[\]<>\/]*\])(?::([0-9]+))?)?$/;
