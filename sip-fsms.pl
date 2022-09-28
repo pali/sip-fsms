@@ -548,6 +548,7 @@ sub tpdu_is_fragmented {
 	my $vpf = ($mti == 1) ? (($first & 0b00011000) >> 3) : 0;
 	my $offset = 1;
 	$offset += 1 unless $mti == 0 or $mti == 3;
+	return unless length $tpdu > $offset;
 	my ($num, $addr_len) = tpdu_decode_address(substr $tpdu, $offset);
 	return unless defined $num and $addr_len > 0;
 	$offset += $addr_len;
