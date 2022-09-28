@@ -2026,28 +2026,39 @@ sub parse_call_identity {
 		my ($hdr, $what) = @{$candidate};
 		next unless exists $headers->{$hdr};
 		foreach my $hdr_val (reverse @{$headers->{$hdr}}) {
-			my $number;
+			my ($number, $domain);
 			if ($what =~ /^(?:name|user|tel)$/) {
 				my ($hdr_parts, $hdr_data) = sip_hdrval2parts($hdr => $hdr_val);
 				next unless defined $hdr_parts;
 				my ($hdr_addr, $hdr_name) = sip_split_name_addr($hdr_parts);
 				if ($what eq 'name') {
 					$number = $hdr_name;
+					($domain) = sip_uri2parts($hdr_addr) if defined $hdr_addr;
 				} elsif ($what eq 'user') {
 					next unless defined $hdr_addr;
-					(undef, $number) = sip_uri2parts($hdr_addr);
+					($domain, $number) = sip_uri2parts($hdr_addr);
 				} elsif ($what eq 'tel') {
 					next unless $hdr_addr =~ /^tel:(.+)$/;
 					$number = $1;
-					my $prefix = exists $hdr_data->{'phone-context'} ? $hdr_data->{'phone-context'} : undef;
-					$number = $prefix . $number if defined $prefix and $prefix =~ /^([-.()0-9*#a-cA-C]+)$/;
+					my $context = exists $hdr_data->{'phone-context'} ? $hdr_data->{'phone-context'} : undef;
+					if (defined $context) {
+						if ($context =~ /^([-.()0-9*#a-cA-C]+)$/) {
+							$number = $context . $number;
+						} else {
+							$domain = $context;
+						}
+					}
 				}
 			} else {
 				($number) = grep { defined($_) } $hdr_val =~ /$what/;
+				($number, $domain) = ($1, $2) if $number =~ /^([^@]*)@(.*)$/;
 			}
 			next unless defined $number;
 			$number =~ s/[-.()]//g;
-			return $number if length $number and $number =~ /^\+?[0-9*#a-cA-C]+$/;
+			if (length $number and $number =~ /^\+?[0-9*#a-cA-C]+$/) {
+				$number .= "\@$domain" if defined $domain and length $domain;
+				return $number;
+			}
 		}
 	}
 	return;
