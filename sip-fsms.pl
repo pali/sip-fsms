@@ -830,8 +830,19 @@ sub tpdu_decode_ud {
 			substr $ud, 0, ($udhl+1)%2, '';
 		} elsif ($ud_enc == 0) {
 			my $plen = (7-(($udhl+1)*8)%7)%7;
-			$ud = pack 'b*', substr unpack('b*', $ud), $plen if $plen;
-			$udl -= $plen;
+			if ($plen) {
+				my $unud = unpack('b*', $ud);
+				if (length $unud > $plen) {
+					$ud = pack 'b*', substr $unud, $plen;
+				} else {
+					$ud = '';
+				}
+				if ($udl > $plen) {
+					$udl -= $plen;
+				} else {
+					$udl = 0;
+				}
+			}
 		}
 	}
 	if ($ud_cd) {
