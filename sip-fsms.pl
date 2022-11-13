@@ -585,6 +585,8 @@ sub tpdu_is_fragmented {
 	return [ $mti, $num->[0], $ref_num, $max_num, $seq_num ];
 }
 
+my @month_days = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31);
+
 sub tpdu_decode_ts {
 	my ($ts) = @_;
 	return unless length $ts == 7;
@@ -592,6 +594,7 @@ sub tpdu_decode_ts {
 	my $sign = (ord($ts[6]) & 0b00001000) ? '-' : '+';
 	$ts[6] = chr(ord($ts[6]) & 0b11110111);
 	my @nums = map { tpdu_decode_semioctet_digits($_) } @ts;
+	return unless $nums[1] >= 1 and $nums[1] <= 12 and $nums[2] >= 1 and $nums[2] <= $month_days[$nums[1]-1] and $nums[3] <= 23 and $nums[4] <= 59 and $nums[5] <= 59;
 	$nums[0] = ($nums[0] < 70) ? "20$nums[0]" : "19$nums[0]";
 	my $tz = $nums[6] * 15;
 	$sign = '' unless $tz;
@@ -601,6 +604,12 @@ sub tpdu_decode_ts {
 sub tpdu_encode_ts {
 	my (@ts) = @_;
 	die "TPDU timestamp must contain 9 elements\n" unless @ts == 9;
+	die "TPDU timestamp year is invalid\n" unless ($ts[0] >= 0 and $ts[0] <= 99) or ($ts[0] >= 1970 and $ts[0] <= 2069);
+	die "TPDU timestamp month is invalid\n" unless $ts[1] >= 1 and $ts[1] <= 12;
+	die "TPDU timestamp day is invalid\n" unless $ts[2] >= 1 and $ts[2] <= $month_days[$ts[1]-1];
+	die "TPDU timestamp hour is invalid\n" unless $ts[3] >= 0 and $ts[3] <= 23;
+	die "TPDU timestamp minute is invalid\n" unless $ts[4] >= 0 and $ts[4] <= 59;
+	die "TPDU timestamp second is invalid\n" unless $ts[5] >= 0 and $ts[5] <= 59;
 	substr $ts[0], 0, -2, '';
 	my $sign = splice @ts, 6, 1;
 	$sign = '' if $sign eq '+';
