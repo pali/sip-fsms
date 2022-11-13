@@ -998,10 +998,11 @@ sub tpdu_decode_report {
 	if ($has_udl) {
 		return unless length $tpdu >= 1;
 		$udl = ord(substr $tpdu, 0, 1, '');
-	} elsif ($ud_enc) {
+		$ud_enc = 0 unless $has_dcs;
+	} elsif (defined $ud_enc) {
 		$udl = length $tpdu;
 	}
-	if ($ud_enc) {
+	if (defined $ud_enc) {
 		($ud, $mwis, $port, $wcmp, $ehl, $ra) = tpdu_decode_ud($tpdu, $has_udh, $udl, $ud_enc, $ud_cd);
 	}
 	if (defined $mwi and defined $mwis) {
