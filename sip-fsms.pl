@@ -918,18 +918,37 @@ sub tpdu_decode {
 	my ($num, $addr_len) = tpdu_decode_address($tpdu);
 	return unless defined $num;
 	substr $tpdu, 0, $addr_len, '';
-	my ($scts, $dt, $st);
+	my ($scts, $dt, $st, $has_pid, $has_dcs, $has_udl);
 	if ($is_status) {
 		return unless length $tpdu >= 7+7+1;
 		$scts = tpdu_decode_ts(substr $tpdu, 0, 7, '');
 		$dt = tpdu_decode_ts(substr $tpdu, 0, 7, '');
 		$st = tpdu_decode_st(substr $tpdu, 0, 1, '');
+		if (length $tpdu >= 1) {
+			my $pi = ord(substr $tpdu, 0, 1, '');
+			$has_pid = ($pi & 0b00000001) ? 1 : 0;
+			$has_dcs = ($pi & 0b00000010) ? 1 : 0;
+			$has_udl = ($pi & 0b00000100) ? 1 : 0;
+			my $has_pi_ext = ($pi & 0b10000000) ? 1 : 0;
+			while ($has_pi_ext) {
+				return unless length $tpdu >= 1;
+				$pi = ord(substr $tpdu, 0, 1, '');
+				$has_pi_ext = ($pi & 0b10000000) ? 1 : 0;
+			}
+		}
+	} else {
+		$has_pid = $has_dcs = $has_udl = 1;
 	}
-	return unless length $tpdu >= 1;
-	my $pid = ord(substr $tpdu, 0, 1, '');
-	return unless length $tpdu >= 1;
-	my ($mc, $ad, $mwi, $ud_enc, $ud_cd) = tpdu_decode_dcs(substr $tpdu, 0, 1, '');
-	my $ud_isbin = ($ud_enc == 1);
+	my $pid;
+	if ($has_pid) {
+		return unless length $tpdu >= 1;
+		$pid = ord(substr $tpdu, 0, 1, '');
+	}
+	my ($mc, $ad, $mwi, $ud_enc, $ud_cd);
+	if ($has_dcs) {
+		return unless length $tpdu >= 1;
+		($mc, $ad, $mwi, $ud_enc, $ud_cd) = tpdu_decode_dcs(substr $tpdu, 0, 1, '');
+	}
 	if ($is_deliver) {
 		return unless length $tpdu >= 7;
 		$scts = tpdu_decode_ts(substr $tpdu, 0, 7, '');
@@ -941,9 +960,19 @@ sub tpdu_decode {
 		return unless defined $vp_len;
 		substr $tpdu, 0, $vp_len, '';
 	}
-	return unless length $tpdu >= 1;
-	my $udl = ord(substr $tpdu, 0, 1, '');
-	my ($ud, $mwis, $port, $wcmp, $ehl, $ra) = tpdu_decode_ud($tpdu, $has_udh, $udl, $ud_enc, $ud_cd);
+	my $udl;
+	if ($has_udl) {
+		return unless length $tpdu >= 1;
+		$udl = ord(substr $tpdu, 0, 1, '');
+		$ud_enc = 0 unless $has_dcs;
+	} elsif (defined $ud_enc) {
+		$udl = length $tpdu;
+	}
+	my ($ud_isbin, $ud, $mwis, $port, $wcmp, $ehl, $ra);
+	if (defined $ud_enc) {
+		$ud_isbin = ($ud_enc == 1);
+		($ud, $mwis, $port, $wcmp, $ehl, $ra) = tpdu_decode_ud($tpdu, $has_udh, $udl, $ud_enc, $ud_cd);
+	}
 	if (defined $mwi and defined $mwis) {
 		foreach (@{$mwis}) {
 			next unless $mwi->[0] == $_->[0];
