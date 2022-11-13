@@ -1161,7 +1161,7 @@ sub tpdu_encode_deliver_nack {
 
 sub tpdu_encode_submit_nack {
 	my ($fcs, $scts) = @_;
-	return tpdu_encode_submit_report(0, $fcs, $scts, undef, undef, undef, undef, undef, undef, undef, undef);
+	return tpdu_encode_submit_report(1, $fcs, $scts, undef, undef, undef, undef, undef, undef, undef, undef);
 }
 
 ### GSM Short Message Radio Layer ###
