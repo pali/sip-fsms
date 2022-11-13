@@ -757,8 +757,8 @@ sub tpdu_encode_dcs {
 	my ($mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2) = @_;
 	die "TPDU message class is invalid\n" if defined $mc and ($mc < 0 or $mc > 3);
 	die "TPDU message class and message waiting indicator cannot be used together\n" if defined $mc and defined $mwi;
-	die "TPDU binary data cannot contain wide characters\n" if $ud_isbin and $data =~ /[^\x00-\xff]/;
-	my $ud_enc = $ud_isbin ? 1 : (defined $ud_ucs2) ? ($ud_ucs2 ? 2 : 0) : eval { encode('GSM0338', decode('UTF-8', $data), 1); 1 } ? 0 : 2;
+	die "TPDU binary data cannot contain wide characters\n" if $ud_isbin and defined $data and $data =~ /[^\x00-\xff]/;
+	my $ud_enc = $ud_isbin ? 1 : (defined $ud_ucs2) ? ($ud_ucs2 ? 2 : 0) : (not defined $data) ? 0 : eval { encode('GSM0338', decode('UTF-8', $data), 1); 1 } ? 0 : 2;
 	my $dcs = 0;
 	if (defined $mwi) {
 		$dcs |= 0b11000000;
@@ -1083,17 +1083,26 @@ sub tpdu_encode {
 	$tpdu .= chr($first);
 	$tpdu .= chr($mr || 0) unless $is_deliver;
 	$tpdu .= tpdu_encode_address(ref $num ? @{$num} : $num);
+	my ($dcs, $ud_enc);
+	($dcs, $ud_enc) = tpdu_encode_dcs($mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2) if not $is_status or defined $mc or $ad or defined $mwi or $ud_isbin or $ud_cd or defined $udh or defined $data;
+	$dcs = undef if $is_status and defined $dcs and ord($dcs) == 0x00;
 	if ($is_status) {
 		$tpdu .= tpdu_encode_ts(@{$scts});
 		$tpdu .= tpdu_encode_ts(@{$dt});
 		$tpdu .= tpdu_encode_st(@{$st});
+		if (defined $pid or defined $dcs or defined $udh or defined $data) {
+			my $pi = 0;
+			$pi |= 0b00000001 if defined $pid;
+			$pi |= 0b00000010 if defined $dcs;
+			$pi |= 0b00000100 if defined $udh or defined $data;
+			$tpdu .= chr($pi);
+		}
 	}
-	$tpdu .= chr($pid);
-	my ($dcs, $ud_enc) = tpdu_encode_dcs($mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2);
-	$tpdu .= $dcs;
+	$tpdu .= chr($pid) if not $is_status or defined $pid;
+	$tpdu .= $dcs if not $is_status or defined $dcs;
 	$tpdu .= tpdu_encode_ts(@{$scts}) if $is_deliver;
 	$tpdu .= $vpd if $is_submit;
-	$tpdu .= tpdu_encode_ud($udh, $ud_enc, $data);
+	$tpdu .= tpdu_encode_ud($udh, $ud_enc, $data) if not $is_status or defined $udh or defined $data;
 	return $tpdu;
 }
 
@@ -1118,18 +1127,22 @@ sub tpdu_encode_command {
 
 sub tpdu_encode_report {
 	my ($is_nack, $mti, $fcs, $scts, $pid, $mc, $ad, $mwi, $udh, $ud_isbin, $ud_cd, $data, $ud_ucs2) = @_;
-	my $tpdu = '';
-	$tpdu .= chr($mti);
-	$tpdu .= chr($fcs) if $is_nack;
+	my ($dcs, $ud_enc);
+	($dcs, $ud_enc) = tpdu_encode_dcs($mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2) if defined $mc or $ad or defined $mwi or $ud_isbin or $ud_cd or defined $udh or defined $data;
+	$dcs = undef if defined $dcs and ord($dcs) == 0x00;
 	my $pi = 0;
 	$pi |= 0b00000001 if defined $pid;
-	$pi |= 0b00000010 if defined $mc;
+	$pi |= 0b00000010 if defined $dcs;
 	$pi |= 0b00000100 if defined $udh or defined $data;
+	my $first = 0;
+	$first |= ($mti & 0b00000011);
+	$first |= 0b01000000 if defined $udh;
+	my $tpdu = '';
+	$tpdu .= chr($first);
+	$tpdu .= chr($fcs) if $is_nack;
 	$tpdu .= chr($pi);
 	$tpdu .= tpdu_encode_ts(@{$scts}) if $mti == 1;
 	$tpdu .= chr($pid) if defined $pid;
-	my ($dcs, $ud_enc);
-	($dcs, $ud_enc) = tpdu_encode_dcs($mc, $ad, $mwi, $ud_isbin, $ud_cd, $data, $ud_ucs2) if defined $mc or $data;
 	$tpdu .= $dcs if defined $dcs;
 	$tpdu .= tpdu_encode_ud($udh, $ud_enc, $data) if defined $udh or defined $data;
 	return $tpdu;
