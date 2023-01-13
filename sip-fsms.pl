@@ -541,6 +541,34 @@ sub tpdu_encode_address {
 	return $address;
 }
 
+sub tpdu_is_command {
+	my ($dir, $tpdu) = @_;
+	# Reject $tpdu as command if it does not have command/status type
+	return 0 unless length $tpdu >= 1;
+	my $first = ord(substr $tpdu, 0, 1);
+	my $mti = ($first & 0b00000011);
+	return 0 unless $mti == 2;
+	# Accept/reject $tpdu as command if we know direction of $tpdu
+	return $dir == 1 if defined $dir;
+	# Reject $tpdu as command if it does not have valid command structure length
+	return 0 unless length $tpdu >= 8;
+	my $addr1_len = ord(substr $tpdu, 5, 1);
+	return 0 unless length $tpdu > 7+$addr1_len;
+	my $cd_len = ord(substr $tpdu, 7+$addr1_len, 1);
+	return 0 unless length $tpdu >= 8+$addr1_len+$cd_len;
+	# Accept $tpdu as command if it does not have valid status structure length or valid status timestamps
+	my $addr2_len = ord(substr $tpdu, 2, 1);
+	return 1 if length $tpdu < 14+$addr2_len;
+	my $scts = tpdu_decode_ts(substr $tpdu, 4+$addr2_len, 7);
+	return 1 if not defined $scts;
+	my $dt = tpdu_decode_ts(substr $tpdu, 11+$addr2_len, 7);
+	return 1 if not defined $scts;
+	# Reject $tpdu as command if it has set some reserved bits
+	return 0 if $first & 0b10011100;
+	# Accept $tpdu as command if $tpdu length matches structure length
+	return length $tpdu == 8+$addr1_len+$cd_len;
+}
+
 sub tpdu_is_fragmented {
 	my ($tpdu) = @_;
 	return unless length $tpdu > 0;
@@ -1061,7 +1089,27 @@ sub tpdu_decode_report {
 }
 
 sub tpdu_decode_command {
-	# TODO
+	my ($tpdu) = @_;
+	return unless length $tpdu >= 1;
+	my $first = ord(substr $tpdu, 0, 1, '');
+	my $mti = ($first & 0b00000011);
+	my $sr = ($first & 0b00100000) ? 1 : 0;
+	my $has_udh = ($first & 0b01000000) ? 1 : 0;
+	return unless length $tpdu >= 1;
+	my $mr = ord(substr $tpdu, 0, 1, '');
+	return unless length $tpdu >= 1;
+	my $pid = ord(substr $tpdu, 0, 1, '');
+	return unless length $tpdu >= 1;
+	my $ct = ord(substr $tpdu, 0, 1, '');
+	return unless length $tpdu >= 1;
+	my $mn = ord(substr $tpdu, 0, 1, '');
+	my ($num, $addr_len) = tpdu_decode_address($tpdu);
+	return unless defined $num;
+	substr $tpdu, 0, $addr_len, '';
+	return unless length $tpdu >= 1;
+	my $cdl = ord(substr $tpdu, 0, 1, '');
+	my ($cd, $mwis, $port, $wcmp, $ehl, $ra) = tpdu_decode_ud($tpdu, $has_udh, $cdl, 1, 0);
+	return ($mti, $sr, $mr, $num, $pid, $mwis, $port, $wcmp, $ehl, $ra, $ct, $mn, $cd);
 }
 
 sub tpdu_encode {
@@ -1297,29 +1345,33 @@ sub atpdu_encode {
 #####
 
 sub process_tpdu {
-	my ($type, $payload) = @_;
-	my ($frag, $mti, $fcs, $mms, $rd, $lp, $sr, $rp, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwis, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud);
+	my ($dir, $type, $payload) = @_;
+	my ($frag, $mti, $fcs, $mms, $rd, $lp, $sr, $rp, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwis, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud, $ct, $mn, $cd);
 	if ($type == $smdll_types{DATA}) {
-		$frag = tpdu_is_fragmented($payload);
-		($mti, $mms, $rd, $lp, $sr, $rp, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwis, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud) = tpdu_decode($payload);
+		if (tpdu_is_command($dir, $payload)) {
+			($mti, $sr, $mr, $num, $pid, $mwis, $port, $wcmp, $ehl, $ra, $ct, $mn, $cd) = tpdu_decode_command($payload);
+		} else {
+			$frag = tpdu_is_fragmented($payload);
+			($mti, $mms, $rd, $lp, $sr, $rp, $mr, $num, $scts, $dt, $st, $pid, $mc, $ad, $mwis, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud) = tpdu_decode($payload);
+		}
 	} else {
 		($mti, $fcs, $scts, $pid, $mc, $ad, $mwis, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud) = tpdu_decode_report($payload, ($type == $smdll_types{NACK}));
 	}
-	return ($frag, $mti, $num, $scts, $pid, $mc, $ad, $mwis, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud);
+	return ($frag, $mti, $num, $scts, $pid, $mc, $ad, $mwis, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud, $ct, $mn, $cd);
 }
 
 sub process_rpdu {
 	my ($payload) = @_;
 	my ($mti, $mr, $oa, $da, $tpdu) = rpdu_decode($payload);
 	return unless defined $tpdu;
-	return (($mti%2 == 0 ? $da : $oa), $tpdu, process_tpdu((($mti == 2 or $mti == 3) ? $smdll_types{ACK} : ($mti == 4 or $mti == 5) ? $smdll_types{NACK} : $smdll_types{DATA}), $tpdu));
+	return (($mti%2 == 0 ? $da : $oa), $tpdu, process_tpdu(($mti%2 == 0 ? 1 : 0), (($mti == 2 or $mti == 3) ? $smdll_types{ACK} : ($mti == 4 or $mti == 5) ? $smdll_types{NACK} : $smdll_types{DATA}), $tpdu));
 }
 
 sub process_atpdu {
 	my ($payload) = @_;
 	my ($smsc, $tpdu) = atpdu_decode($payload);
 	return unless defined $tpdu;
-	return ($smsc, $tpdu, process_tpdu($smdll_types{DATA}, $tpdu));
+	return ($smsc, $tpdu, process_tpdu(undef, $smdll_types{DATA}, $tpdu));
 }
 
 #####
@@ -1335,7 +1387,7 @@ sub process_audio_finish {
 }
 
 sub decode_audio_sample {
-	my ($state, $sample) = @_;
+	my ($state, $sample, $dir) = @_;
 	my $smtl_buffer = $state->{smtl_buffer};
 	my ($status, $noext, $type, $payload, $checksum) = smdll_decode($state, $sample);
 	return unless defined $status;
@@ -1343,7 +1395,7 @@ sub decode_audio_sample {
 	$payload = smtl_decode_data($smtl_buffer, $noext, $type, $payload);
 	return ($status, $type) unless defined $payload;
 	my @tpdu_data;
-	@tpdu_data = process_tpdu($type, $payload) if $type == $smdll_types{ACK} or $type == $smdll_types{NACK} or $type == $smdll_types{DATA};
+	@tpdu_data = process_tpdu($dir, $type, $payload) if $type == $smdll_types{ACK} or $type == $smdll_types{NACK} or $type == $smdll_types{DATA};
 	return ($status, $type, $payload, @tpdu_data);
 }
 
@@ -1376,7 +1428,7 @@ sub prepare_data_messages_send_mode {
 
 sub process_audio_sample {
 	my ($state, $mode, $role, $tpdu_callback, $current_message, $remaining_buffer, $finish, $sample) = @_;
-	my ($status, $type, $payload, @tpdu_data) = decode_audio_sample($state, $sample);
+	my ($status, $type, $payload, @tpdu_data) = decode_audio_sample($state, $sample, ($role eq 'te') ? 0 : ($role eq 'sc') ? 1 : undef);
 	return ($finish, $status) unless defined $status and not $finish;
 	my @next_message;
 	my $next_message_prepend_only = 0;
@@ -1422,6 +1474,7 @@ sub process_audio_sample {
 			} else {
 				warn localtime . " - Received TPDU data\n";
 				my $mti = $tpdu_data[1];
+				my $ct = $tpdu_data[16];
 				my @time = localtime(time);
 				my $tz = int((timegm(@time) - timelocal(@time)) / 60);
 				my $scts = [ 1900+$time[5], 1+$time[4], $time[3], $time[2], $time[1], $time[0], ($tz < 0 ? '-' : ''), int(abs($tz)/60), abs($tz)%60 ];
@@ -1430,7 +1483,7 @@ sub process_audio_sample {
 					if (not defined $mti) {
 						$fcs = 0xFF; # unspecified error cause
 						$err = 'broken TPDU';
-					} elsif ($mti != 1) {
+					} elsif ($mti == 0 or $mti == 3) {
 						$fcs = 0xB0; # TPDU not supported
 						$err = 'unsupported TPDU MTI';
 					} else {
@@ -1468,7 +1521,7 @@ sub process_audio_sample {
 				} else {
 					my $fcs = $tpdu_callback->(1, $type, $payload, @tpdu_data);
 					my $fcs_str = (defined $fcs) ? (sprintf "0x%02X", $fcs) : undef;
-					if (defined $mti and $mti == 1) {
+					if (defined $ct or (defined $mti and $mti == 1)) {
 						if (defined $fcs) {
 							warn localtime . " - Sending negative acknowledge ($fcs_str) for sc role due to TPDU callback\n";
 							@next_message = smdll_encode_nack(tpdu_encode_submit_nack($fcs, $scts));
@@ -1938,7 +1991,7 @@ sub process_full_message {
 my $frag_cache;
 
 sub process_frag_message {
-	my ($smte, $smsc, $country, $tpdu, $frag, $mti, $num, $scts, $pid, $mc, $ad, $mwis, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud) = @_;
+	my ($smte, $smsc, $country, $tpdu, $frag, $mti, $num, $scts, $pid, $mc, $ad, $mwis, $vp, $port, $wcmp, $ehl, $ra, $ud_isbin, $ud_cd, $ud, $ct, $mn, $cd) = @_;
 
 	my $time = time;
 
@@ -2581,10 +2634,11 @@ sub protocol_sip_loop {
 			my $tpdu_callback = ($mode eq 'receive') ? sub {
 				my ($no_erorr, $type, $payload, @tpdu_data) = @_;
 				my $mti = $tpdu_data[1] || 0;
-				my $dir = ($role eq 'te') ? 0 : ($role eq 'sc') ? 1 : ($mti == 1) ? 1 : 0;
+				my $ct = $tpdu_data[16];
+				my $dir = ($role eq 'te') ? 0 : ($role eq 'sc') ? 1 : ($mti == 1 or defined $ct) ? 1 : 0;
 				my $smsc = parse_call_identity(($dir ? $local_sc_number : $remote_sc_number), $param->{fsms_headers});
 				my $smte = parse_call_identity(($dir ? $remote_te_number : $local_te_number), $param->{fsms_headers});
-				# TODO: process Status Report with $mti == 2
+				# TODO: process Status Report and Command with $mti == 2
 				process_frag_message($smte, $smsc, $country, $payload, @tpdu_data);
 				return;
 			} : sub {
