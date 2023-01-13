@@ -505,9 +505,12 @@ sub tpdu_decode_address {
 		$number_type = 0b101;
 	} elsif ($number_type == 0b000 and $number_plan == 0b1001) {
 		# Special undocumented Alphabet encoding for F-SMS TPDU address used in Czech Republic:
-		# Characters are encoded as semioctets indexed from one: A=1, B=2, ... N=14, O=15, P=0.
-		# And then it overflows and continues again from one: Q=1, R=2, S=3, ... Y=9, Z=10.
-		# Because decoding of 1..10 is ambiguous, decode all semioctets as A-P characters only.
+		# ASCII characters are encoded as semioctets by storing only low 4 bits of each character.
+		# ASCII 'A'=0x41, (0x41 & 0b1111) = 1; ASCII 'B'=0x42, (0x42 & 0b1111) = 2; ...
+		# ASCII 'a'=0x61, (0x61 & 0b1111) = 1; ASCII 'b'=0x62, (0x62 & 0b1111) = 2; ...
+		# ASCII 'N'=0x4E, 'n'=0x6E, '.'=0x2E and all those characters have number 14 in low 4 bits.
+		# Decoding is ambiguous, so decode all semioctets as ASCII 'A' - 'P' characters only.
+		# In most cases TPDU address contains only letters, so this is the best approximation.
 		$number_value = substr(join('', map { chr(ord("A") + ($_ + 16 - 1) % 16) } map { (ord($_) & 0b1111), (ord($_) >> 4) } split //, $address_value), 0, $number_len);
 		$number_type = 0b101;
 	} else {
