@@ -3108,6 +3108,7 @@ die "$0: Invalid --sip-listen option $sip_listen\n" unless $sip_listen =~ /^(?:(
 my $sip_proto = (defined $1) ? $1 : (defined $sip_peer_proto) ? $sip_peer_proto : (defined $sip_register_proto) ? $sip_register_proto : 'udp';
 die "$0: Protocol for --sip-listen and --sip-proxy does not match\n" if defined $sip_proto and defined $sip_peer_proto and $sip_proto ne $sip_peer_proto;
 die "$0: Protocol for --sip-listen and --sip-register does not match\n" if defined $sip_proto and defined $sip_register_proto and $sip_proto ne $sip_register_proto;
+die "$0: For non-UDP protocols is required Net::SIP 0.829 or new\n" if $sip_proto ne 'udp' and not eval { Net::SIP->VERSION(0.829) };
 my $sip_listen_addr = (length $2) ? $2 : undef;
 my $sip_listen_port = (defined $3) ? $3 : ($mode eq 'send' or defined $sip_register_host) ? undef : ($sip_proto eq 'tls') ? 5061 : 5060;
 my $sip_public_addr = (defined $4 and length $4) ? $4 : undef;
