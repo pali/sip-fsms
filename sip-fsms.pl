@@ -2845,7 +2845,7 @@ SIP receive options:
   --local-te-number=list   --local-number for te when receiver is in te role (default --local-number)
   --remote-sc-number=list  --remote-number for sc when receiver is in te role (default --remote-number)
   --local-sc-number=list   --local-number for sc when receiver is in sc role (default --local-number)
-  --remote-te-number=list  --remote-number for te when receiver is in sc role (default --remtoe-number)
+  --remote-te-number=list  --remote-number for te when receiver is in sc role (default --remote-number)
   --sip-identity=identity  SIP identity "name <sip:user\@host>" (default name="F-SMS", user=sip-register-user or "fsms", host=sip-register-host or "localhost")
   --sip-accept-uri=regex   Perl regex with allowed SIP URIs for incoming calls (default ^.*\$)
   --sip-register=format    format: proto:user:pass\@host:port (default without registration)
